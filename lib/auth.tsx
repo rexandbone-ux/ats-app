@@ -65,16 +65,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+    let mounted = true;
+    // Initial session check (safe to await here — not inside the auth lock callback).
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!mounted) return;
       if (session?.user) await loadProfile(session.user.id, session.user.email || "");
+      if (mounted) setLoading(false);
+    }).catch(() => { if (mounted) setLoading(false); });
+    // IMPORTANT: do NOT await Supabase DB calls directly inside onAuthStateChange —
+    // the auth lock is held during the callback and a DB call would deadlock.
+    // Defer with setTimeout so the lock is released first.
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      if (!mounted) return;
+      if (session?.user) {
+        const uid = session.user.id, em = session.user.email || "";
+        setTimeout(() => { if (mounted) loadProfile(uid, em); }, 0);
+      } else {
+        setProfile(null);
+      }
       setLoading(false);
-    })();
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_e, session) => {
-      if (session?.user) await loadProfile(session.user.id, session.user.email || "");
-      else setProfile(null);
     });
-    return () => sub.subscription.unsubscribe();
+    return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, [loadProfile]);
 
   const signIn = useCallback(async (email: string, password: string) => {
