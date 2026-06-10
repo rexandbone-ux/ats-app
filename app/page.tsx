@@ -56,13 +56,15 @@ function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
   const { profile } = useAuth();
   const [d, setD] = useState<any>(null);
   useEffect(() => { (async () => {
-    const [{ data: ca }, { data: jo }, { data: ap }, { data: cl }, { data: st }, { data: iv }] = await Promise.all([
+    const [{ data: ca }, { data: jo }, { data: ap }, { data: cl }, { data: st }, { data: iv }, { data: tk }, { data: calls }] = await Promise.all([
       supabase.from("candidates").select("id,status,source,created_at,updated_at").limit(10000),
       supabase.from("jobs").select("id,title,status,created_at,updated_at").limit(3000),
       supabase.from("applications").select("offer_accepted_at,offer_declined_at,offer_date").limit(20000),
       supabase.from("clients").select("id,status").limit(2000),
       supabase.from("pipeline_stages").select("*").order("sort_order"),
       supabase.from("interviews").select("id,scheduled_at,type,status,candidates(first_name,last_name)").gte("scheduled_at", new Date().toISOString()).order("scheduled_at").limit(8),
+      supabase.from("tasks").select("id,title,due_date,priority,status,candidates(first_name,last_name)").neq("status", "completed").order("due_date", { nullsFirst: false }).limit(10),
+      supabase.from("activities").select("id,type,description,created_at,candidates(first_name,last_name)").in("type", ["call", "text"]).order("created_at", { ascending: false }).limit(8),
     ]);
     const jobs = jo || []; const cands = ca || []; const apps = ap || [];
     const openJobs = jobs.filter((j: any) => j.status === "open");
@@ -79,7 +81,7 @@ function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
       ageRows: openJobs.map((j: any) => ({ title: j.title, age: days(j.created_at) })).sort((a: any, b: any) => b.age - a.age).slice(0, 6),
       ageAvg: openJobs.length ? Math.round(openJobs.reduce((s: number, j: any) => s + days(j.created_at), 0) / openJobs.length) : 0,
       offers, accepted, rate: offers ? Math.round((accepted / offers) * 100) : null,
-      stages: st || [], sb, iv: iv || [],
+      stages: st || [], sb, iv: iv || [], tasks: tk || [], calls: calls || [],
     });
   })(); }, []);
   if (!d) return <div className="py-20 text-center text-gray-400">Loading...</div>;
@@ -104,6 +106,11 @@ function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
     </div>
 
     <Widget title="Upcoming Interviews">{d.iv.length === 0 ? <Empty /> : <div className="divide-y">{d.iv.map((i: any) => <div key={i.id} className="flex items-center justify-between py-2"><div className="flex items-center gap-2"><Av n={`${i.candidates?.first_name || "?"} ${i.candidates?.last_name || ""}`} sz="w-7 h-7 text-[10px]" /><div><div className="text-sm">{i.candidates?.first_name} {i.candidates?.last_name}</div><div className="text-[10px] text-gray-400">{(i.type || "").replace(/_/g, " ")}</div></div></div><div className="text-xs text-gray-500">{new Date(i.scheduled_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div></div>)}</div>}</Widget>
+
+    <div className="grid md:grid-cols-2 gap-4 mt-4">
+      <Widget title="Tasks due">{d.tasks.length === 0 ? <Empty /> : <div className="divide-y">{d.tasks.map((t: any) => { const overdue = t.due_date && new Date(t.due_date) < new Date(); return <div key={t.id} className="flex items-center justify-between py-2"><div className="min-w-0"><div className="text-sm truncate">{t.title}</div><div className="text-[10px] text-gray-400">{t.candidates ? `${t.candidates.first_name} ${t.candidates.last_name}` : ""}</div></div><span className={`text-[10px] ${overdue ? "text-red-500" : "text-gray-400"}`}>{t.due_date ? new Date(t.due_date).toLocaleDateString() : "—"}</span></div>; })}</div>}</Widget>
+      <Widget title="My Unattended Calls">{d.calls.length === 0 ? <Empty /> : <div className="divide-y">{d.calls.map((cl: any) => <div key={cl.id} className="flex items-center justify-between py-2 text-sm"><span>{cl.candidates ? `${cl.candidates.first_name} ${cl.candidates.last_name}` : cl.description}</span><span className="text-[10px] text-gray-400">{new Date(cl.created_at).toLocaleDateString()}</span></div>)}</div>}</Widget>
+    </div>
   </div>;
 }
 
@@ -143,7 +150,7 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
   useEffect(() => { supabase.from("profiles").select("id,first_name,last_name,email,role").in("role", ["super_admin", "admin", "recruiter", "hiring_manager"]).then(({ data }) => setRecruiters(data || [])); supabase.from("jobs").select("id,title").order("created_at", { ascending: false }).then(({ data }) => setJobsList(data || [])); supabase.from("pipeline_stages").select("id,name,sort_order").order("sort_order").then(({ data }) => setStages(data || [])); }, []);
   const load = useCallback(async () => {
     const { data } = await supabase.from("candidates").select("*").eq("id", pr.id).single(); setC(data);
-    const { data: ap } = await supabase.from("applications").select("id,status,created_at,job_id,jobs(title)").eq("candidate_id", pr.id); setApps(ap || []);
+    const { data: ap } = await supabase.from("applications").select("id,status,created_at,job_id,offer_amount,offer_date,offer_accepted_at,offer_declined_at,jobs(title)").eq("candidate_id", pr.id); setApps(ap || []);
     const { data: nt } = await supabase.from("notes").select("*").eq("candidate_id", pr.id).order("created_at", { ascending: false }); setNotes(nt || []);
     const { data: ac } = await supabase.from("activities").select("*").eq("candidate_id", pr.id).order("created_at", { ascending: false }).limit(100); setActs(ac || []);
   }, [pr.id]);
@@ -154,6 +161,8 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
   async function removeTag(t: string) { if (!c) return; const tags = (c.tags || []).filter((x: string) => x !== t); await supabase.from("candidates").update({ tags }).eq("id", c.id); setC({ ...c, tags }); }
   async function setOwner(uid: string) { if (!c) return; await supabase.from("candidates").update({ owner_id: uid || null }).eq("id", c.id); setC({ ...c, owner_id: uid || null }); const rn = recruiters.find(r => r.id === uid); logActivity("assigned", `Assigned to ${rn ? (rn.first_name || rn.email) : "—"}`, { candidate_id: c.id }, profile?.id).then(load); }
   async function addToPipeline(jobId: string) { if (!jobId || !c) return; const stageId = stages[0]?.id || null; const { error } = await supabase.from("applications").insert({ candidate_id: c.id, job_id: jobId, stage_id: stageId, status: "active", source: "manual" }); if (!error) { await logActivity("application_received", "Added to pipeline", { candidate_id: c.id, job_id: jobId }, profile?.id); } setAddPipe(false); load(); }
+  async function recordOffer(appId: string) { const amt = window.prompt("Offer amount (e.g. 5 or 1200):"); if (amt === null) return; await supabase.from("applications").update({ offer_amount: parseFloat(amt.replace(/[^0-9.]/g, "")) || null, offer_date: new Date().toISOString() }).eq("id", appId); if (c) await supabase.from("candidates").update({ status: "offered" }).eq("id", c.id); await logActivity("offer", `Offer extended${amt ? " ($" + amt + ")" : ""}`, { candidate_id: pr.id }, profile?.id); load(); }
+  async function offerDecision(appId: string, accepted: boolean) { await supabase.from("applications").update(accepted ? { offer_accepted_at: new Date().toISOString() } : { offer_declined_at: new Date().toISOString() }).eq("id", appId); if (c) await supabase.from("candidates").update({ status: accepted ? "placed" : "rejected" }).eq("id", c.id); await logActivity("offer", accepted ? "Offer accepted" : "Offer declined", { candidate_id: pr.id }, profile?.id); load(); }
   async function runAI() {
     setScoring(true);
     try { const { data, error } = await supabase.functions.invoke("candidate-ai-analysis", { body: { candidate_id: pr.id } }); if (error) throw error; if ((data as any)?.error) throw new Error((data as any).error); await load(); } catch (e: any) { alert("AI analysis failed: " + (e?.message || e)); }
@@ -172,7 +181,7 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
       <div className="bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-3">Professional</h3>{[["Title", c.current_title], ["Company", c.current_company], ["Experience", c.experience_years ? `${c.experience_years}yr` : null], ["Source", c.source]].map(([l, v]) => v ? <div key={l as string} className="flex justify-between py-1 border-b border-gray-50 text-xs"><span className="text-gray-400">{l}</span><span className="capitalize">{v as string}</span></div> : null)}</div>
       {(c.resume_url || c.voice_recording_url || c.video_url || c.linkedin_url) && <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-3">Documents &amp; media</h3><div className="grid md:grid-cols-2 gap-x-6"><MediaLink label="Résumé" url={c.resume_url} /><MediaLink label="Voice / video recording" url={c.voice_recording_url} /><MediaLink label="Video" url={c.video_url} />{c.linkedin_url && <MediaLink label="LinkedIn" url={c.linkedin_url} />}</div></div>}
       {c.skills && c.skills.length > 0 && <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">Skills</h3><div className="flex flex-wrap gap-1">{c.skills.map((s: string) => <span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-[10px]">{s}</span>)}</div></div>}
-      <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">Applications ({apps.length})</h3>{apps.length === 0 ? <p className="text-xs text-gray-400">No applications.</p> : apps.map(a => <div key={a.id} className="flex justify-between items-center py-1.5 border-b border-gray-50 text-xs"><span>{a.jobs?.title || "Job"}</span><B s={a.status} /></div>)}</div>
+      <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">Applications &amp; offers ({apps.length})</h3>{apps.length === 0 ? <p className="text-xs text-gray-400">No applications. Use “+ Pipeline” above to add this candidate to a job.</p> : apps.map((a: any) => <div key={a.id} className="py-2 border-b border-gray-50"><div className="flex justify-between items-center"><span className="text-sm">{a.jobs?.title || "Job"}</span><B s={a.status} /></div><div className="flex items-center gap-2 mt-1.5 flex-wrap">{a.offer_accepted_at ? <span className="text-[10px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full">Offer accepted{a.offer_amount ? ` · $${a.offer_amount}` : ""}</span> : a.offer_declined_at ? <span className="text-[10px] px-2 py-0.5 bg-red-100 text-red-700 rounded-full">Offer declined</span> : a.offer_date ? <><span className="text-[10px] px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">Offer out{a.offer_amount ? ` · $${a.offer_amount}` : ""}</span>{editable && <><button onClick={() => offerDecision(a.id, true)} className="text-[10px] px-2 py-0.5 border rounded-lg">Mark accepted</button><button onClick={() => offerDecision(a.id, false)} className="text-[10px] px-2 py-0.5 border rounded-lg">Declined</button></>}</> : (editable && <button onClick={() => recordOffer(a.id)} className="text-[10px] px-2 py-0.5 border rounded-lg">Record offer</button>)}</div></div>)}</div>
     </div>}
     {tab === "responses" && <div className="space-y-4">
       {c.screening_responses && <div className="bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-3">Screening responses</h3>{typeof c.screening_responses === "object" ? Object.entries(c.screening_responses).map(([k, v]) => <div key={k} className="mb-3 p-3 bg-gray-50 rounded-lg"><div className="text-[10px] font-medium text-gray-400 mb-1">{k}</div><div className="text-sm">{String(v)}</div></div>) : <p className="text-sm">{String(c.screening_responses)}</p>}</div>}
