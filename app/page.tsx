@@ -46,26 +46,64 @@ function MediaLink({ label, url }: { label: string; url?: string }) {
   </div>;
 }
 
-/* ---------------- Dashboard ---------------- */
+/* ---------------- Dashboard (Zoho-style) ---------------- */
+function Widget({ title, children, info }: { title: string; children: any; info?: string }) {
+  return <div className="bg-white rounded-lg border"><div className="px-4 py-2.5 border-b flex items-center gap-1.5"><h3 className="text-sm font-medium text-gray-700">{title}</h3>{info && <span title={info} className="text-gray-300 text-xs">ⓘ</span>}</div><div className="p-4">{children}</div></div>;
+}
+function Empty() { return <div className="py-10 text-center text-gray-400 text-sm">No records found</div>; }
+function days(from: string, to?: string) { return Math.max(0, Math.round(((to ? new Date(to).getTime() : Date.now()) - new Date(from).getTime()) / 86400000)); }
 function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
-  const [d, setD] = useState<any>(null); const [rec, setRec] = useState<C[]>([]);
+  const { profile } = useAuth();
+  const [d, setD] = useState<any>(null);
   useEffect(() => { (async () => {
-    const [{ data: ca }, { data: jo }, { data: ap }, { data: cl }, { data: st }] = await Promise.all([
-      supabase.from("candidates").select("id,status,source").limit(10000), supabase.from("jobs").select("id,status").limit(2000), supabase.from("applications").select("id").limit(20000), supabase.from("clients").select("id,status").limit(2000), supabase.from("pipeline_stages").select("*").order("sort_order")]);
-    const { data: r } = await supabase.from("candidates").select("*").order("created_at", { ascending: false }).limit(8);
-    setD({ t: ca?.length || 0, oj: jo?.filter((j: any) => j.status === "open").length || 0, ap: ap?.length || 0, ac: cl?.filter((c: any) => c.status === "active").length || 0, sb: (ca || []).reduce((a: any, c: any) => { a[c.status] = (a[c.status] || 0) + 1; return a; }, {}), src: (ca || []).reduce((a: any, c: any) => { a[c.source || "unknown"] = (a[c.source || "unknown"] || 0) + 1; return a; }, {}), st: st || [] }); setRec(r || []);
+    const [{ data: ca }, { data: jo }, { data: ap }, { data: cl }, { data: st }, { data: iv }] = await Promise.all([
+      supabase.from("candidates").select("id,status,source,created_at,updated_at").limit(10000),
+      supabase.from("jobs").select("id,title,status,created_at,updated_at").limit(3000),
+      supabase.from("applications").select("offer_accepted_at,offer_declined_at,offer_date").limit(20000),
+      supabase.from("clients").select("id,status").limit(2000),
+      supabase.from("pipeline_stages").select("*").order("sort_order"),
+      supabase.from("interviews").select("id,scheduled_at,type,status,candidates(first_name,last_name)").gte("scheduled_at", new Date().toISOString()).order("scheduled_at").limit(8),
+    ]);
+    const jobs = jo || []; const cands = ca || []; const apps = ap || [];
+    const openJobs = jobs.filter((j: any) => j.status === "open");
+    const filled = jobs.filter((j: any) => j.status === "filled");
+    const placed = cands.filter((c: any) => c.status === "placed" || c.status === "hired");
+    const ttf = filled.length ? Math.round(filled.reduce((s: number, j: any) => s + days(j.created_at, j.updated_at), 0) / filled.length) : null;
+    const tth = placed.length ? Math.round(placed.reduce((s: number, c: any) => s + days(c.created_at, c.updated_at), 0) / placed.length) : null;
+    const accepted = apps.filter((a: any) => a.offer_accepted_at).length;
+    const declined = apps.filter((a: any) => a.offer_declined_at).length;
+    const offers = accepted + declined;
+    const sb = cands.reduce((a: any, c: any) => { a[c.status] = (a[c.status] || 0) + 1; return a; }, {});
+    setD({
+      tCand: cands.length, oj: openJobs.length, tClient: (cl || []).filter((c: any) => c.status === "active").length, ttf, tth,
+      ageRows: openJobs.map((j: any) => ({ title: j.title, age: days(j.created_at) })).sort((a: any, b: any) => b.age - a.age).slice(0, 6),
+      ageAvg: openJobs.length ? Math.round(openJobs.reduce((s: number, j: any) => s + days(j.created_at), 0) / openJobs.length) : 0,
+      offers, accepted, rate: offers ? Math.round((accepted / offers) * 100) : null,
+      stages: st || [], sb, iv: iv || [],
+    });
   })(); }, []);
   if (!d) return <div className="py-20 text-center text-gray-400">Loading...</div>;
+  const cards = [["Candidates", d.tCand, "cands"], ["Open positions", d.oj, "jobs"], ["Active clients", d.tClient, "clients"], ["Upcoming interviews", d.iv.length, "interviews"]] as const;
   return <div>
-    <h1 className="text-xl font-semibold mb-6">Dashboard</h1>
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">{[["Candidates", d.t], ["Open jobs", d.oj], ["Applications", d.ap], ["Active clients", d.ac]].map(([l, v]) => <div key={l as string} className="bg-white rounded-xl border p-4"><div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">{l}</div><div className="text-2xl font-semibold">{v}</div></div>)}</div>
-    <div className="grid md:grid-cols-2 gap-4 mb-6">
-      <div className="bg-white rounded-xl border p-4"><h3 className="text-sm text-gray-500 mb-3">By status</h3>{Object.entries(d.sb).sort((a: any, b: any) => b[1] - a[1]).map(([s, c]: any) => <div key={s} className="flex items-center gap-2 mb-1"><B s={s} /><div className="flex-1 h-1.5 bg-gray-100 rounded-full"><div className="h-full bg-blue-400 rounded-full" style={{ width: `${(c / d.t) * 100}%` }} /></div><span className="text-xs w-7 text-right">{c}</span></div>)}</div>
-      <div className="bg-white rounded-xl border p-4"><h3 className="text-sm text-gray-500 mb-3">By source</h3>{Object.entries(d.src).sort((a: any, b: any) => b[1] - a[1]).slice(0, 6).map(([s, c]: any) => <div key={s} className="flex items-center gap-2 mb-2"><span className="text-xs text-gray-400 w-20 capitalize truncate">{s}</span><div className="flex-1 h-2 bg-gray-100 rounded-full"><div className="h-full bg-blue-500 rounded-full" style={{ width: `${(c / Math.max(...Object.values(d.src) as number[])) * 100}%` }} /></div><span className="text-xs w-7 text-right">{c}</span></div>)}</div>
+    <div className="flex justify-between items-center mb-5"><h1 className="text-lg font-semibold">Welcome {profile?.first_name || "back"}</h1><span className="text-xs text-gray-400">Master view</span></div>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">{cards.map(([l, v, dest]) => <div key={l} onClick={() => nav(dest as string)} className="bg-white rounded-lg border p-4 cursor-pointer hover:shadow-sm"><div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">{l}</div><div className="text-2xl font-semibold">{v as number}</div></div>)}</div>
+
+    <div className="mb-5"><Widget title="Hiring Pipeline" info="Candidates by stage">
+      <div className="flex gap-1 flex-wrap">{d.stages.map((s: any) => { const n = Object.entries(d.sb).filter(([k]: any) => k).length; return <div key={s.id} className="flex-1 min-w-[90px] text-center py-3 rounded-lg" style={{ background: s.color + "14", border: `1px solid ${s.color}30` }}><div className="text-[9px] font-semibold" style={{ color: s.color }}>{s.name}</div></div>; })}</div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-4">{Object.entries(d.sb).sort((a: any, b: any) => b[1] - a[1]).map(([s, c]: any) => <div key={s} className="flex items-center gap-1.5 text-xs"><B s={s} /><span className="text-gray-500">{c}</span></div>)}</div>
+    </Widget></div>
+
+    <div className="grid md:grid-cols-2 gap-4 mb-4">
+      <Widget title="Time-to-fill" info="Avg days to fill a position">{d.ttf == null ? <Empty /> : <div className="py-4 text-center"><div className="text-4xl font-semibold">{d.ttf}</div><div className="text-xs text-gray-400 mt-1">average days</div></div>}</Widget>
+      <Widget title="Time-to-hire" info="Avg days from applied to hired">{d.tth == null ? <Empty /> : <div className="py-4 text-center"><div className="text-4xl font-semibold">{d.tth}</div><div className="text-xs text-gray-400 mt-1">average days</div></div>}</Widget>
     </div>
-    <div className="bg-white rounded-xl border p-4 mb-6"><h3 className="text-sm text-gray-500 mb-3">Pipeline</h3><div className="flex gap-1 flex-wrap">{d.st.map((s: any) => <div key={s.id} className="flex-1 min-w-[80px] text-center py-2 rounded-lg" style={{ background: s.color + "18", border: `1px solid ${s.color}30` }}><div className="text-[9px] font-semibold" style={{ color: s.color }}>{s.name}</div></div>)}</div></div>
-    <h3 className="text-sm text-gray-500 mb-3">Recent candidates</h3>
-    <div className="bg-white rounded-xl border divide-y">{rec.map(c => <div key={c.id} onClick={() => nav("det", { id: c.id })} className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50"><Av n={`${c.first_name} ${c.last_name}`} /><div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{c.first_name} {c.last_name}</div><div className="text-xs text-gray-400 truncate">{c.current_title || c.email || ""}</div></div><B s={c.status} /></div>)}</div>
+
+    <div className="grid md:grid-cols-2 gap-4 mb-4">
+      <Widget title="Age of Job" info="How long open positions have been live">{d.ageRows.length === 0 ? <Empty /> : <table className="w-full text-sm"><thead><tr className="text-left text-[10px] text-gray-400 uppercase"><th className="pb-2">Position</th><th className="pb-2 text-right">Days open</th></tr></thead><tbody>{d.ageRows.map((r: any, i: number) => <tr key={i} className="border-t border-gray-50"><td className="py-1.5 truncate max-w-[200px]">{r.title}</td><td className="py-1.5 text-right font-medium">{r.age}</td></tr>)}<tr className="border-t font-medium"><td className="py-1.5 text-gray-500">All jobs (avg)</td><td className="py-1.5 text-right">{d.ageAvg}</td></tr></tbody></table>}</Widget>
+      <Widget title="Offer Acceptance Rate">{d.rate == null ? <Empty /> : <div className="py-4 text-center"><div className="text-4xl font-semibold">{d.rate}%</div><div className="text-xs text-gray-400 mt-1">{d.accepted} of {d.offers} offers accepted</div></div>}</Widget>
+    </div>
+
+    <Widget title="Upcoming Interviews">{d.iv.length === 0 ? <Empty /> : <div className="divide-y">{d.iv.map((i: any) => <div key={i.id} className="flex items-center justify-between py-2"><div className="flex items-center gap-2"><Av n={`${i.candidates?.first_name || "?"} ${i.candidates?.last_name || ""}`} sz="w-7 h-7 text-[10px]" /><div><div className="text-sm">{i.candidates?.first_name} {i.candidates?.last_name}</div><div className="text-[10px] text-gray-400">{(i.type || "").replace(/_/g, " ")}</div></div></div><div className="text-xs text-gray-500">{new Date(i.scheduled_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div></div>)}</div>}</Widget>
   </div>;
 }
 
@@ -563,13 +601,16 @@ export default function Home() {
       default: return <Dash nav={nav} />;
     }
   };
-  return <div className="flex min-h-screen">
-    <aside className="w-48 bg-slate-900 flex flex-col shrink-0">
-      <div className="p-4 border-b border-slate-700"><div className="text-sm font-semibold text-white">Streamlined</div><div className="text-[10px] text-slate-500">Staffing ATS</div></div>
-      <nav className="flex-1 p-2">{items.map(it => { const a = pg === it.id || (it.id === "cands" && pg === "det") || (it.id === "jobs" && pg === "job") || (it.id === "clients" && pg === "client"); return <button key={it.id} onClick={() => nav(it.id)} className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-left mb-0.5 ${a ? "bg-slate-800 text-white" : "text-slate-400 hover:text-slate-200"}`}><span>{it.i}</span>{it.l}</button>; })}</nav>
-      <div className="p-3 border-t border-slate-700"><div className="text-[10px] text-slate-400 mb-2 truncate">{profile.email}<div className="text-slate-500">{ROLE_LABELS[role]}</div></div><button onClick={signOut} className="w-full text-left text-xs text-slate-400 hover:text-white">Sign out</button></div>
-    </aside>
-    <main className="flex-1 bg-gray-50 overflow-auto"><header className="bg-white border-b px-6 py-3 flex justify-between items-center"><span className="text-sm text-gray-400 capitalize">{pg}</span><Av n={`${profile.first_name || profile.email}`} sz="w-7 h-7 text-[10px]" /></header><div className="p-6 max-w-6xl mx-auto">{R()}</div></main>
+  const isActive = (id: string) => pg === id || (id === "cands" && pg === "det") || (id === "jobs" && pg === "job") || (id === "clients" && pg === "client") || (id === "pools" && pg === "pool");
+  return <div className="min-h-screen bg-gray-50">
+    <header className="bg-slate-900 text-white sticky top-0 z-30">
+      <div className="flex items-center h-12 px-4 gap-1">
+        <div className="flex items-center gap-2 mr-4 shrink-0"><span className="w-6 h-6 rounded bg-teal-500 flex items-center justify-center text-[11px] font-bold">S</span><span className="font-semibold text-sm">Streamlined</span></div>
+        <nav className="flex items-center gap-0.5 flex-1 overflow-x-auto no-scrollbar">{items.map(it => <button key={it.id} onClick={() => nav(it.id)} className={`px-3 py-1.5 rounded text-[13px] whitespace-nowrap ${isActive(it.id) ? "bg-white/15 text-white font-medium" : "text-slate-300 hover:text-white hover:bg-white/5"}`}>{it.l}</button>)}</nav>
+        <div className="flex items-center gap-3 shrink-0 pl-3"><span className="text-[11px] text-slate-400 hidden md:block">{ROLE_LABELS[role]}</span><button onClick={signOut} title="Sign out" className="text-slate-300 hover:text-white text-xs">Sign out</button><Av n={`${profile.first_name || profile.email}`} sz="w-7 h-7 text-[10px]" /></div>
+      </div>
+    </header>
+    <main><div className="p-6 max-w-6xl mx-auto">{R()}</div></main>
   </div>;
 }
 function Denied() { return <div className="py-20 text-center text-gray-400 text-sm">You don&rsquo;t have access to this section.</div>; }
