@@ -71,17 +71,19 @@ function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
 
 /* ---------------- Candidates list ---------------- */
 function Cands({ nav, editable }: { nav: (p: string, d?: any) => void; editable: boolean }) {
-  const [cs, setCs] = useState<C[]>([]); const [q, setQ] = useState(""); const [f, setF] = useState("all"); const [pg, setPg] = useState(0); const [tot, setTot] = useState(0); const [add, setAdd] = useState(false); const [sel, setSel] = useState<Set<string>>(new Set()); const [bulkTag, setBulkTag] = useState("");
+  const [cs, setCs] = useState<C[]>([]); const [q, setQ] = useState(""); const [f, setF] = useState("all"); const [pg, setPg] = useState(0); const [tot, setTot] = useState(0); const [add, setAdd] = useState(false); const [sel, setSel] = useState<Set<string>>(new Set()); const [bulkTag, setBulkTag] = useState(""); const [pools, setPools] = useState<any[]>([]);
   const load = useCallback(async () => { let qr = supabase.from("candidates").select("*", { count: "exact" }); if (q) qr = qr.or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%,email.ilike.%${q}%,current_title.ilike.%${q}%`); if (f !== "all") qr = qr.eq("status", f); const { data, count } = await qr.order("created_at", { ascending: false }).range(pg * 25, (pg + 1) * 25 - 1); setCs(data || []); setTot(count || 0); }, [q, f, pg]);
   useEffect(() => { load(); }, [load]);
   const ids = () => Array.from(sel);
   function toggle(id: string) { setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
   async function bulkStatus(s: string) { if (!sel.size) return; await supabase.from("candidates").update({ status: s }).in("id", ids()); setSel(new Set()); load(); }
   async function applyBulkTag() { const t = bulkTag.trim(); if (!t || !sel.size) return; for (const c of cs.filter(x => sel.has(x.id))) { const tags = Array.from(new Set([...(((c as any).tags) || []), t])); await supabase.from("candidates").update({ tags }).eq("id", c.id); } setBulkTag(""); setSel(new Set()); load(); }
+  useEffect(() => { supabase.from("talent_pools").select("id,name").order("name").then(({ data }) => setPools(data || [])); }, []);
+  async function applyBulkPool(poolId: string) { if (!poolId || !sel.size) return; const rows = ids().map(cid => ({ talent_pool_id: poolId, candidate_id: cid })); await supabase.from("talent_pool_candidates").insert(rows); setSel(new Set()); alert("Added to pool."); }
   return <div>
     <div className="flex justify-between items-center mb-4"><h1 className="text-xl font-semibold">Candidates ({tot})</h1>{editable && <button onClick={() => setAdd(true)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm">+ Add candidate</button>}</div>
     <div className="flex gap-2 mb-4"><input value={q} onChange={e => { setQ(e.target.value); setPg(0); }} placeholder="Search..." className="flex-1 px-3 py-2 border rounded-lg text-sm" /><select value={f} onChange={e => { setF(e.target.value); setPg(0); }} className="px-3 py-2 border rounded-lg text-sm"><option value="all">All</option>{CAND_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}</select></div>
-    {editable && sel.size > 0 && <div className="flex items-center gap-2 mb-3 p-2 bg-slate-800 rounded-lg text-white text-sm flex-wrap"><span className="px-2">{sel.size} selected</span><select onChange={e => { if (e.target.value) bulkStatus(e.target.value); e.target.value = ""; }} className="px-2 py-1 rounded text-slate-800 text-xs"><option value="">Set status…</option>{CAND_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}</select><input value={bulkTag} onChange={e => setBulkTag(e.target.value)} onKeyDown={e => e.key === "Enter" && applyBulkTag()} placeholder="add tag…" className="px-2 py-1 rounded text-slate-800 text-xs w-28" /><button onClick={applyBulkTag} className="text-xs px-2 py-1 bg-white/20 rounded">Tag</button><button onClick={() => setSel(new Set())} className="text-xs px-2 py-1 ml-auto">Clear</button></div>}
+    {editable && sel.size > 0 && <div className="flex items-center gap-2 mb-3 p-2 bg-slate-800 rounded-lg text-white text-sm flex-wrap"><span className="px-2">{sel.size} selected</span><select onChange={e => { if (e.target.value) bulkStatus(e.target.value); e.target.value = ""; }} className="px-2 py-1 rounded text-slate-800 text-xs"><option value="">Set status…</option>{CAND_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}</select><input value={bulkTag} onChange={e => setBulkTag(e.target.value)} onKeyDown={e => e.key === "Enter" && applyBulkTag()} placeholder="add tag…" className="px-2 py-1 rounded text-slate-800 text-xs w-28" /><button onClick={applyBulkTag} className="text-xs px-2 py-1 bg-white/20 rounded">Tag</button><select onChange={e => { if (e.target.value) applyBulkPool(e.target.value); e.target.value = ""; }} className="px-2 py-1 rounded text-slate-800 text-xs"><option value="">Add to pool…</option>{pools.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><button onClick={() => setSel(new Set())} className="text-xs px-2 py-1 ml-auto">Clear</button></div>}
     <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full text-sm"><thead><tr className="border-b text-left">{["", "Name", "Title", "Status", "Source", "Date"].map((h, hi) => <th key={hi} className="px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase">{h}</th>)}</tr></thead><tbody className="divide-y divide-gray-50">{cs.map(c => <tr key={c.id} className="hover:bg-gray-50"><td className="px-3 py-2" onClick={e => e.stopPropagation()}>{editable && <input type="checkbox" checked={sel.has(c.id)} onChange={() => toggle(c.id)} className="w-4 h-4" />}</td><td className="px-3 py-2 cursor-pointer" onClick={() => nav("det", { id: c.id })}><div className="flex items-center gap-2"><Av n={`${c.first_name} ${c.last_name}`} sz="w-6 h-6 text-[9px]" /><div><div className="font-medium">{c.first_name} {c.last_name}</div><div className="text-[10px] text-gray-400">{c.email || ""}</div></div></div></td><td className="px-3 py-2 text-gray-500">{c.current_title || ""}</td><td className="px-3 py-2"><B s={c.status} /></td><td className="px-3 py-2 text-gray-400 capitalize text-xs">{c.source || ""}</td><td className="px-3 py-2 text-[10px] text-gray-400">{new Date(c.created_at).toLocaleDateString()}</td></tr>)}</tbody></table>
       <div className="flex justify-between px-3 py-2 border-t text-xs text-gray-400"><span>{tot ? pg * 25 + 1 : 0}-{Math.min((pg + 1) * 25, tot)} of {tot}</span><div className="flex gap-1"><button disabled={pg === 0} onClick={() => setPg(p => p - 1)} className="px-2 py-1 border rounded disabled:opacity-30">Prev</button><button disabled={(pg + 1) * 25 >= tot} onClick={() => setPg(p => p + 1)} className="px-2 py-1 border rounded disabled:opacity-30">Next</button></div></div></div>
     {add && <AddCandidate onClose={() => setAdd(false)} onSaved={() => { setAdd(false); load(); }} />}
@@ -394,6 +396,28 @@ function RecordPlacement({ onClose, onSaved }: { onClose: () => void; onSaved: (
   </Modal>;
 }
 
+/* ---------------- Talent Pools ---------------- */
+function Pools({ nav, editable }: { nav: (p: string, d?: any) => void; editable: boolean }) {
+  const [pools, setPools] = useState<any[]>([]); const [counts, setCounts] = useState<Record<string, number>>({}); const [add, setAdd] = useState(false); const [name, setName] = useState("");
+  const load = useCallback(async () => { const { data } = await supabase.from("talent_pools").select("*").order("name"); setPools(data || []); const { data: tpc } = await supabase.from("talent_pool_candidates").select("talent_pool_id").limit(20000); const c: Record<string, number> = {}; (tpc || []).forEach((r: any) => { c[r.talent_pool_id] = (c[r.talent_pool_id] || 0) + 1; }); setCounts(c); }, []);
+  useEffect(() => { load(); }, [load]);
+  async function create() { if (!name.trim()) return; await supabase.from("talent_pools").insert({ name: name.trim() }); setName(""); setAdd(false); load(); }
+  return <div><div className="flex justify-between items-center mb-4"><h1 className="text-xl font-semibold">Talent pools ({pools.length})</h1>{editable && <button onClick={() => setAdd(true)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm">+ New pool</button>}</div>
+    <div className="grid md:grid-cols-3 gap-3">{pools.map(p => <div key={p.id} onClick={() => nav("pool", { id: p.id, name: p.name })} className="bg-white rounded-xl border p-4 cursor-pointer hover:shadow-sm"><div className="font-medium">{p.name}</div><div className="text-xs text-gray-400 mt-1">{counts[p.id] || 0} candidates</div>{p.description && <div className="text-xs text-gray-500 mt-2">{p.description}</div>}</div>)}</div>
+    {add && <Modal title="New talent pool" onClose={() => setAdd(false)}><Field label="Pool name *" value={name} onChange={(e: any) => setName(e.target.value)} /><button onClick={create} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm">Create pool</button></Modal>}
+  </div>;
+}
+function PoolDetail({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any; editable: boolean }) {
+  const [members, setMembers] = useState<any[]>([]);
+  const load = useCallback(async () => { const { data } = await supabase.from("talent_pool_candidates").select("id,candidate_id,candidates(first_name,last_name,current_title,status)").eq("talent_pool_id", pr.id); setMembers(data || []); }, [pr.id]);
+  useEffect(() => { load(); }, [load]);
+  async function remove(rowId: string) { await supabase.from("talent_pool_candidates").delete().eq("id", rowId); load(); }
+  return <div><button onClick={() => nav("pools")} className="text-sm text-gray-400 mb-4 block">&larr; Back</button>
+    <h1 className="text-xl font-semibold mb-4">{pr.name || "Pool"} ({members.length})</h1>
+    <div className="bg-white rounded-xl border divide-y">{members.length === 0 ? <p className="p-6 text-center text-gray-400 text-sm">No candidates yet. Add them from the Candidates list (select &rarr; Add to pool).</p> : members.map(m => <div key={m.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50"><Av n={`${m.candidates?.first_name || ""} ${m.candidates?.last_name || ""}`} sz="w-7 h-7 text-[10px]" /><div className="flex-1 min-w-0 cursor-pointer" onClick={() => m.candidate_id && nav("det", { id: m.candidate_id })}><div className="text-sm font-medium">{m.candidates?.first_name} {m.candidates?.last_name}</div><div className="text-[10px] text-gray-400">{m.candidates?.current_title || ""}</div></div><B s={m.candidates?.status || "new"} />{editable && <button onClick={() => remove(m.id)} className="text-gray-300 hover:text-red-500 text-xs">remove</button>}</div>)}</div>
+  </div>;
+}
+
 /* ---------------- Settings: users & roles ---------------- */
 function Settings() {
   const { profile } = useAuth();
@@ -432,7 +456,7 @@ function Login() {
 
 /* ---------------- Shell ---------------- */
 const NV: { id: Section; l: string; i: string }[] = [
-  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "settings", l: "Settings", i: "⚙️" }];
+  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "settings", l: "Settings", i: "⚙️" }];
 
 export default function Home() {
   const { profile, loading, signOut } = useAuth();
@@ -454,6 +478,8 @@ export default function Home() {
       case "clients": return allowed("clients") ? <Clients nav={nav} editable={editable} /> : <Denied />;
       case "client": return allowed("clients") ? <ClientDetail nav={nav} pr={pr} editable={editable} /> : <Denied />;
       case "placements": return allowed("placements") ? <Placements nav={nav} editable={editable} /> : <Denied />;
+      case "pools": return allowed("pools") ? <Pools nav={nav} editable={editable} /> : <Denied />;
+      case "pool": return allowed("pools") ? <PoolDetail nav={nav} pr={pr} editable={editable} /> : <Denied />;
       case "interviews": return allowed("interviews") ? <Interviews nav={nav} editable={editable} /> : <Denied />;
       case "tasks": return allowed("tasks") ? <Tasks /> : <Denied />;
       case "reports": return allowed("reports") ? <Reports /> : <Denied />;
