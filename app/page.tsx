@@ -14,6 +14,27 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   return <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={onClose}><div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center px-5 py-3 border-b"><h3 className="font-semibold">{title}</h3><button onClick={onClose} className="text-gray-400 text-xl leading-none">&times;</button></div><div className="p-5">{children}</div></div></div>;
 }
 function Field({ label, ...p }: any) { return <label className="block mb-3"><span className="text-xs text-gray-500">{label}</span><input {...p} className="w-full px-3 py-2 border rounded-lg text-sm mt-1" /></label>; }
+function embedOf(url: string): { type: string; src: string } | null {
+  if (!url) return null; const u = url.trim();
+  let m = u.match(/voca(?:roo)?\.(?:com|ro)\/(?:embed\/)?([A-Za-z0-9]+)/i);
+  if (m && /voca/i.test(u)) return { type: "audio", src: `https://vocaroo.com/embed/${m[1]}?autoplay=0` };
+  m = u.match(/loom\.com\/(?:share|embed)\/([A-Za-z0-9]+)/i);
+  if (m) return { type: "video", src: `https://www.loom.com/embed/${m[1]}` };
+  m = u.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([A-Za-z0-9_-]+)/i);
+  if (m) return { type: "video", src: `https://www.youtube.com/embed/${m[1]}` };
+  m = u.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/i);
+  if (m) return { type: "video", src: `https://drive.google.com/file/d/${m[1]}/preview` };
+  return null;
+}
+function MediaLink({ label, url }: { label: string; url?: string }) {
+  if (!url || !url.trim()) return null;
+  const e = embedOf(url);
+  return <div className="mb-3"><div className="flex items-center justify-between mb-1"><span className="text-xs font-medium text-gray-600">{label}</span><a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open ↗</a></div>
+    {e?.type === "audio" && <iframe src={e.src} className="w-full" height="60" frameBorder="0" />}
+    {e?.type === "video" && <div className="relative w-full" style={{ paddingBottom: "56%" }}><iframe src={e.src} className="absolute inset-0 w-full h-full rounded-lg" frameBorder="0" allowFullScreen /></div>}
+    {!e && <a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline break-all">{url}</a>}
+  </div>;
+}
 
 /* ---------------- Dashboard ---------------- */
 function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
@@ -91,7 +112,8 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
     {tab === "overview" && <div className="grid md:grid-cols-2 gap-4">
       <div className="bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-3">Contact</h3>{[["Email", c.email], ["Phone", c.phone], ["Location", [c.city, c.state].filter(Boolean).join(", ")]].map(([l, v]) => v ? <div key={l as string} className="flex justify-between py-1 border-b border-gray-50 text-xs"><span className="text-gray-400">{l}</span><span>{v as string}</span></div> : null)}</div>
       <div className="bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-3">Professional</h3>{[["Title", c.current_title], ["Company", c.current_company], ["Experience", c.experience_years ? `${c.experience_years}yr` : null], ["Source", c.source]].map(([l, v]) => v ? <div key={l as string} className="flex justify-between py-1 border-b border-gray-50 text-xs"><span className="text-gray-400">{l}</span><span className="capitalize">{v as string}</span></div> : null)}</div>
-      {c.skills && c.skills.length > 0 && <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">Skills</h3><div className="flex flex-wrap gap-1">{c.skills.map(s => <span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-[10px]">{s}</span>)}</div></div>}
+      {(c.resume_url || c.voice_recording_url || c.video_url || c.linkedin_url) && <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-3">Documents &amp; media</h3><div className="grid md:grid-cols-2 gap-x-6"><MediaLink label="Résumé" url={c.resume_url} /><MediaLink label="Voice / video recording" url={c.voice_recording_url} /><MediaLink label="Video" url={c.video_url} />{c.linkedin_url && <MediaLink label="LinkedIn" url={c.linkedin_url} />}</div></div>}
+      {c.skills && c.skills.length > 0 && <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">Skills</h3><div className="flex flex-wrap gap-1">{c.skills.map((s: string) => <span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-[10px]">{s}</span>)}</div></div>}
       <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">Applications ({apps.length})</h3>{apps.length === 0 ? <p className="text-xs text-gray-400">No applications.</p> : apps.map(a => <div key={a.id} className="flex justify-between items-center py-1.5 border-b border-gray-50 text-xs"><span>{a.jobs?.title || "Job"}</span><B s={a.status} /></div>)}</div>
     </div>}
     {tab === "responses" && <div className="space-y-4">
