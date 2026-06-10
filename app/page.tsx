@@ -14,24 +14,31 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   return <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={onClose}><div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center px-5 py-3 border-b"><h3 className="font-semibold">{title}</h3><button onClick={onClose} className="text-gray-400 text-xl leading-none">&times;</button></div><div className="p-5">{children}</div></div></div>;
 }
 function Field({ label, ...p }: any) { return <label className="block mb-3"><span className="text-xs text-gray-500">{label}</span><input {...p} className="w-full px-3 py-2 border rounded-lg text-sm mt-1" /></label>; }
+function rawDbx(u: string) { return u.replace("www.dropbox.com", "dl.dropboxusercontent.com").replace(/([?&])dl=0/, "$1raw=1"); }
 function embedOf(url: string): { type: string; src: string } | null {
   if (!url) return null; const u = url.trim();
   let m = u.match(/voca(?:roo)?\.(?:com|ro)\/(?:embed\/)?([A-Za-z0-9]+)/i);
   if (m && /voca/i.test(u)) return { type: "audio", src: `https://vocaroo.com/embed/${m[1]}?autoplay=0` };
   m = u.match(/loom\.com\/(?:share|embed)\/([A-Za-z0-9]+)/i);
-  if (m) return { type: "video", src: `https://www.loom.com/embed/${m[1]}` };
+  if (m) return { type: "iframe", src: `https://www.loom.com/embed/${m[1]}` };
   m = u.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([A-Za-z0-9_-]+)/i);
-  if (m) return { type: "video", src: `https://www.youtube.com/embed/${m[1]}` };
+  if (m) return { type: "iframe", src: `https://www.youtube.com/embed/${m[1]}` };
   m = u.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/i);
-  if (m) return { type: "video", src: `https://drive.google.com/file/d/${m[1]}/preview` };
+  if (m) return { type: "iframe", src: `https://drive.google.com/file/d/${m[1]}/preview` };
+  if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(u)) return { type: "video", src: rawDbx(u) };
+  if (/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) return { type: "audiofile", src: rawDbx(u) };
+  if (/\.pdf(\?|$)/i.test(u)) return { type: "pdf", src: rawDbx(u) };
   return null;
 }
 function MediaLink({ label, url }: { label: string; url?: string }) {
   if (!url || !url.trim()) return null;
   const e = embedOf(url);
-  return <div className="mb-3"><div className="flex items-center justify-between mb-1"><span className="text-xs font-medium text-gray-600">{label}</span><a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open ↗</a></div>
+  return <div className="mb-4"><div className="flex items-center justify-between mb-1"><span className="text-xs font-medium text-gray-600">{label}</span><a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open ↗</a></div>
     {e?.type === "audio" && <iframe src={e.src} className="w-full" height="60" frameBorder="0" />}
-    {e?.type === "video" && <div className="relative w-full" style={{ paddingBottom: "56%" }}><iframe src={e.src} className="absolute inset-0 w-full h-full rounded-lg" frameBorder="0" allowFullScreen /></div>}
+    {e?.type === "audiofile" && <audio controls src={e.src} className="w-full" />}
+    {(e?.type === "iframe") && <div className="relative w-full" style={{ paddingBottom: "56%" }}><iframe src={e.src} className="absolute inset-0 w-full h-full rounded-lg border" frameBorder="0" allowFullScreen /></div>}
+    {e?.type === "video" && <video controls src={e.src} className="w-full rounded-lg border max-h-72" />}
+    {e?.type === "pdf" && <iframe src={e.src} className="w-full rounded-lg border" height="420" />}
     {!e && <a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline break-all">{url}</a>}
   </div>;
 }
@@ -99,7 +106,7 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
   async function removeTag(t: string) { if (!c) return; const tags = (c.tags || []).filter((x: string) => x !== t); await supabase.from("candidates").update({ tags }).eq("id", c.id); setC({ ...c, tags }); }
   async function runAI() {
     setScoring(true);
-    try { const { data, error } = await supabase.functions.invoke("candidate-scoring", { body: { candidate_id: pr.id } }); if (error) throw error; await load(); } catch (e: any) { alert("AI scoring unavailable: " + (e?.message || e)); }
+    try { const { data, error } = await supabase.functions.invoke("candidate-ai-analysis", { body: { candidate_id: pr.id } }); if (error) throw error; if ((data as any)?.error) throw new Error((data as any).error); await load(); } catch (e: any) { alert("AI analysis failed: " + (e?.message || e)); }
     setScoring(false);
   }
   if (!c) return <div className="py-20 text-center text-gray-400">Loading...</div>;
@@ -123,7 +130,12 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
       {!c.screening_responses && !c.application_answers && !c.resume_text && <div className="bg-white rounded-xl border p-10 text-center text-gray-400 text-sm">No responses recorded.</div>}
     </div>}
     {tab === "notes" && <div className="bg-white rounded-xl border p-4"><div className="flex gap-2 mb-4"><input value={note} onChange={e => setNote(e.target.value)} onKeyDown={e => e.key === "Enter" && addNote()} placeholder="Add a note..." className="flex-1 px-3 py-2 border rounded-lg text-sm" /><button onClick={addNote} className="bg-slate-800 text-white px-3 rounded-lg text-sm">Add</button></div>{notes.length === 0 ? <p className="text-xs text-gray-400">No notes yet.</p> : notes.map(n => <div key={n.id} className="py-2 border-b border-gray-50"><div className="text-sm">{n.content}</div><div className="text-[10px] text-gray-400 mt-0.5">{new Date(n.created_at).toLocaleString()}</div></div>)}</div>}
-    {tab === "ai" && <div className="bg-white rounded-xl border p-6">{c.ai_analysis ? <div><div className="flex items-center gap-3 mb-4"><span className="text-3xl font-bold">{c.overall_score ?? "-"}</span><div><B s={c.status} /><div className="text-xs text-gray-400 mt-1">{c.ai_recommendation}</div></div></div><pre className="text-xs whitespace-pre-wrap bg-gray-50 p-3 rounded-lg max-h-80 overflow-auto">{typeof c.ai_analysis === "string" ? c.ai_analysis : JSON.stringify(c.ai_analysis, null, 2)}</pre></div> : <div className="text-center"><p className="text-sm text-gray-500 mb-4">Run AI analysis to score this candidate 1&ndash;100 with an Advance / Hold / Reject recommendation.</p>{editable && <button disabled={scoring} onClick={runAI} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">{scoring ? "Analyzing..." : "Run AI analysis"}</button>}</div>}</div>}
+    {tab === "ai" && (() => { const a: any = c.ai_analysis && typeof c.ai_analysis === "object" ? c.ai_analysis : null; return <div className="bg-white rounded-xl border p-6">{a ? <div>
+      <div className="flex items-center gap-4 mb-4"><div className="w-16 h-16 rounded-full bg-slate-800 text-white flex items-center justify-center text-2xl font-bold">{c.overall_score ?? a.score ?? "–"}</div><div><span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${c.ai_recommendation === "ADVANCE" ? "bg-green-100 text-green-700" : c.ai_recommendation === "REJECT" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>{c.ai_recommendation || a.recommendation}</span><div className="text-xs text-gray-400 mt-1">AI assessment · score out of 100</div></div></div>
+      {a.summary && <p className="text-sm text-gray-700 mb-4">{a.summary}</p>}
+      <div className="grid md:grid-cols-2 gap-4">{a.strengths?.length > 0 && <div><h4 className="text-xs font-semibold text-green-700 mb-1">Strengths</h4><ul className="list-disc ml-4 text-sm text-gray-600 space-y-0.5">{a.strengths.map((s: string, i: number) => <li key={i}>{s}</li>)}</ul></div>}{a.concerns?.length > 0 && <div><h4 className="text-xs font-semibold text-red-600 mb-1">Concerns</h4><ul className="list-disc ml-4 text-sm text-gray-600 space-y-0.5">{a.concerns.map((s: string, i: number) => <li key={i}>{s}</li>)}</ul></div>}</div>
+      {editable && <button disabled={scoring} onClick={runAI} className="mt-4 text-xs text-blue-600 hover:underline disabled:opacity-50">{scoring ? "Re-analyzing..." : "Re-run analysis"}</button>}
+    </div> : <div className="text-center"><p className="text-sm text-gray-500 mb-4">Run AI analysis to score this candidate 1&ndash;100 with an Advance / Hold / Reject recommendation, based on their resume, responses, and notes.</p>{editable && <button disabled={scoring} onClick={runAI} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">{scoring ? "Analyzing..." : "Run AI analysis"}</button>}</div>}</div>; })()}
     {emailOpen && <EmailModal cand={c} onClose={() => setEmailOpen(false)} />}
   </div>;
 }
