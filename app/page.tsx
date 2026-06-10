@@ -186,11 +186,41 @@ function EmailModal({ cand, onClose }: { cand: any; onClose: () => void }) {
 }
 
 /* ---------------- Jobs ---------------- */
+const JOB_STATUSES = ["draft", "open", "on_hold", "filled", "closed"];
+const JST: Record<string, string> = { open: "bg-green-100 text-green-800", on_hold: "bg-yellow-100 text-yellow-800", filled: "bg-blue-100 text-blue-800", draft: "bg-gray-100 text-gray-600", closed: "bg-gray-100 text-gray-500" };
 function Jobs({ nav, editable }: { nav: (p: string, d?: any) => void; editable: boolean }) {
-  const [js, setJs] = useState<any[]>([]); const [cl, setCl] = useState<Record<string, string>>({}); const [add, setAdd] = useState(false);
-  const load = useCallback(async () => { const { data: j } = await supabase.from("jobs").select("*").order("created_at", { ascending: false }); const { data: c } = await supabase.from("clients").select("id,company_name"); setJs(j || []); setCl((c || []).reduce((a: any, x: any) => { a[x.id] = x.company_name; return a; }, {})); }, []);
+  const [jobs, setJobs] = useState<any[]>([]); const [clients, setClients] = useState<any[]>([]); const [apps, setApps] = useState<any[]>([]); const [stages, setStages] = useState<any[]>([]); const [recs, setRecs] = useState<any[]>([]); const [add, setAdd] = useState(false); const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const load = useCallback(async () => {
+    const { data: j } = await supabase.from("jobs").select("*").order("created_at", { ascending: false });
+    const { data: c } = await supabase.from("clients").select("id,company_name").order("company_name");
+    const { data: a } = await supabase.from("applications").select("job_id,stage_id,status").limit(5000);
+    const { data: st } = await supabase.from("pipeline_stages").select("id,name,sort_order,color").order("sort_order");
+    const { data: r } = await supabase.from("profiles").select("id,first_name,email").in("role", ["super_admin", "admin", "recruiter", "hiring_manager"]);
+    setJobs(j || []); setClients(c || []); setApps(a || []); setStages(st || []); setRecs(r || []);
+  }, []);
   useEffect(() => { load(); }, [load]);
-  return <div><div className="flex justify-between items-center mb-4"><h1 className="text-xl font-semibold">Positions ({js.length})</h1>{editable && <button onClick={() => setAdd(true)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm">+ Add position</button>}</div><div className="space-y-2">{js.map(j => <div key={j.id} onClick={() => nav("job", { id: j.id })} className="bg-white rounded-xl border p-4 flex justify-between items-center cursor-pointer hover:bg-gray-50"><div><div className="font-medium">{j.title}</div><div className="text-xs text-gray-400 flex gap-3 mt-1">{cl[j.client_id] && <span className="capitalize">{cl[j.client_id]}</span>}<span>{j.location || "Remote"}</span></div></div><B s={j.status} /></div>)}</div>{add && <AddJob clients={cl} onClose={() => setAdd(false)} onSaved={() => { setAdd(false); load(); }} />}</div>;
+  const clientName = (id: string) => clients.find(c => c.id === id)?.company_name || "Unassigned";
+  const clientMap: Record<string, string> = {}; clients.forEach(c => clientMap[c.id] = c.company_name);
+  const recName = (id: string) => { const r = recs.find(x => x.id === id); return r ? (r.first_name || r.email) : ""; };
+  async function setJobStatus(id: string, s: string) { setJobs(js => js.map(j => j.id === id ? { ...j, status: s } : j)); await supabase.from("jobs").update({ status: s }).eq("id", id); }
+  async function setJobRec(id: string, r: string) { setJobs(js => js.map(j => j.id === id ? { ...j, recruiter_id: r || null } : j)); await supabase.from("jobs").update({ recruiter_id: r || null }).eq("id", id); }
+  const jobApps = (id: string) => apps.filter(a => a.job_id === id);
+  const breakdown = (id: string) => { const list = jobApps(id); const first = stages[0]?.id; const m: Record<string, number> = {}; list.forEach(a => { const sid = a.stage_id || first; m[sid] = (m[sid] || 0) + 1; }); return stages.filter(s => m[s.id]).map(s => ({ name: s.name, color: s.color, n: m[s.id] })); };
+  const byClient: Record<string, any[]> = {}; jobs.forEach(j => { const k = j.client_id || "none"; (byClient[k] = byClient[k] || []).push(j); });
+  const groups = Object.keys(byClient).map(k => ({ clientId: k, name: k === "none" ? "Unassigned" : clientName(k), jobs: byClient[k] })).sort((a, b) => a.name.localeCompare(b.name));
+  return <div>
+    <div className="flex justify-between items-center mb-4"><div><h1 className="text-xl font-semibold">Positions board</h1><p className="text-xs text-gray-400">{jobs.length} positions · {groups.length} clients — every role you&rsquo;re filling, by client.</p></div>{editable && <button onClick={() => setAdd(true)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm">+ Add position</button>}</div>
+    {groups.map(g => <div key={g.clientId} className="mb-5">
+      <div onClick={() => setCollapsed(p => ({ ...p, [g.clientId]: !p[g.clientId] }))} className="flex items-center gap-2 mb-1 cursor-pointer select-none"><span className="text-xs text-gray-400 w-3">{collapsed[g.clientId] ? "▸" : "▾"}</span><h3 className="text-sm font-semibold capitalize">{g.name}</h3><span className="text-[10px] text-gray-400">{g.jobs.length} {g.jobs.length === 1 ? "role" : "roles"}</span></div>
+      {!collapsed[g.clientId] && <div className="bg-white rounded-xl border overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left bg-gray-50/60">{["Position", "Status", "Recruiter", "Candidates", "Progress"].map(h => <th key={h} className="px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase">{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-gray-50">{g.jobs.map(j => { const bd = breakdown(j.id); const total = jobApps(j.id).length; return <tr key={j.id} className="hover:bg-gray-50"><td className="px-3 py-2 font-medium cursor-pointer min-w-[160px]" onClick={() => nav("job", { id: j.id })}>{j.title}<div className="text-[10px] text-gray-400">{j.location || "Remote"}</div></td>
+          <td className="px-3 py-2">{editable ? <select value={j.status} onChange={e => setJobStatus(j.id, e.target.value)} className={`px-2 py-1 rounded-md text-xs font-semibold border-0 cursor-pointer ${JST[j.status] || "bg-gray-100"}`}>{JOB_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}</select> : <B s={j.status} />}</td>
+          <td className="px-3 py-2">{editable ? <select value={j.recruiter_id || ""} onChange={e => setJobRec(j.id, e.target.value)} className="px-2 py-1 border rounded text-xs"><option value="">— assign —</option>{recs.map(r => <option key={r.id} value={r.id}>{r.first_name || r.email}</option>)}</select> : (recName(j.recruiter_id) || "—")}</td>
+          <td className="px-3 py-2 text-center font-medium">{total}</td>
+          <td className="px-3 py-2"><div className="flex gap-1 flex-wrap">{bd.length === 0 ? <span className="text-[10px] text-gray-300">no candidates yet</span> : bd.map(s => <span key={s.name} className="text-[9px] px-1.5 py-0.5 rounded-full whitespace-nowrap" style={{ background: s.color + "22", color: s.color }}>{s.name} {s.n}</span>)}</div></td></tr>; })}</tbody></table></div>}
+    </div>)}
+    {add && <AddJob clients={clientMap} onClose={() => setAdd(false)} onSaved={() => { setAdd(false); load(); }} />}
+  </div>;
 }
 function AddJob({ clients, onClose, onSaved }: { clients: Record<string, string>; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState<any>({ title: "", location: "", description: "", client_id: "" }); const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [gen, setGen] = useState(false);
