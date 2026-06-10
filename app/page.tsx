@@ -166,6 +166,104 @@ function Search({ nav }: { nav: (p: string, d?: any) => void }) {
   return <div><h1 className="text-xl font-semibold mb-1">AI Search</h1><p className="text-xs text-gray-400 mb-4">Search by title, name, or skill &mdash; e.g. &ldquo;medical intake coordinator&rdquo;.</p><div className="flex gap-2 mb-4"><input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} placeholder="Search candidates..." className="flex-1 px-3 py-2 border rounded-lg text-sm" /><button onClick={go} disabled={busy} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">{busy ? "..." : "Search"}</button></div>{done && rs.length === 0 && <p className="text-sm text-gray-400">No matches.</p>}{rs.length > 0 && <div className="bg-white rounded-xl border divide-y">{rs.map(c => <div key={c.id} onClick={() => nav("det", { id: c.id })} className="px-4 py-3 cursor-pointer hover:bg-gray-50 flex justify-between items-center"><div className="flex items-center gap-2"><Av n={`${c.first_name} ${c.last_name}`} sz="w-7 h-7 text-[10px]" /><div><div className="text-sm font-medium">{c.first_name} {c.last_name}</div><div className="text-[10px] text-gray-400">{c.current_title || ""}</div></div></div><B s={c.status} /></div>)}</div>}</div>;
 }
 
+/* ---------------- Interviews ---------------- */
+const ITYPES = ["phone_screen", "video_call", "in_person", "panel", "technical", "client_interview"];
+const IREC = ["strong_yes", "yes", "maybe", "no", "strong_no"];
+function Interviews({ nav, editable }: { nav: (p: string, d?: any) => void; editable: boolean }) {
+  const [list, setList] = useState<any[]>([]); const [add, setAdd] = useState(false); const [fb, setFb] = useState<any>(null);
+  const load = useCallback(async () => { const { data } = await supabase.from("interviews").select("*,candidates(first_name,last_name,current_title)").order("scheduled_at", { ascending: true }); setList(data || []); }, []);
+  useEffect(() => { load(); }, [load]);
+  const now = new Date();
+  const upcoming = list.filter(i => i.scheduled_at && new Date(i.scheduled_at) >= now && i.status !== "completed" && i.status !== "cancelled");
+  const past = list.filter(i => !upcoming.includes(i));
+  function Row({ i }: { i: any }) {
+    return <div className="bg-white rounded-xl border p-4 flex justify-between items-center"><div className="flex items-center gap-3"><Av n={`${i.candidates?.first_name || "?"} ${i.candidates?.last_name || ""}`} /><div><div className="text-sm font-medium">{i.candidates?.first_name} {i.candidates?.last_name}</div><div className="text-[11px] text-gray-400">{(i.type || "").replace(/_/g, " ")} · {i.scheduled_at ? new Date(i.scheduled_at).toLocaleString() : "unscheduled"}{i.duration ? ` · ${i.duration}m` : ""}</div>{i.recommendation && <span className="text-[10px] text-gray-500">Rec: {i.recommendation.replace(/_/g, " ")}</span>}</div></div><div className="flex items-center gap-2"><B s={i.status || "scheduled"} />{editable && <button onClick={() => setFb(i)} className="text-xs px-2 py-1 border rounded-lg">Feedback</button>}</div></div>;
+  }
+  return <div><div className="flex justify-between items-center mb-4"><h1 className="text-xl font-semibold">Interviews</h1>{editable && <button onClick={() => setAdd(true)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm">+ Schedule</button>}</div>
+    <h3 className="text-sm text-gray-500 mb-2">Upcoming ({upcoming.length})</h3>
+    <div className="space-y-2 mb-6">{upcoming.length === 0 ? <p className="text-xs text-gray-400">Nothing scheduled.</p> : upcoming.map(i => <Row key={i.id} i={i} />)}</div>
+    <h3 className="text-sm text-gray-500 mb-2">Past ({past.length})</h3>
+    <div className="space-y-2">{past.slice(0, 30).map(i => <Row key={i.id} i={i} />)}</div>
+    {add && <ScheduleInterview onClose={() => setAdd(false)} onSaved={() => { setAdd(false); load(); }} />}
+    {fb && <InterviewFeedback iv={fb} onClose={() => setFb(null)} onSaved={() => { setFb(null); load(); }} />}
+  </div>;
+}
+function ScheduleInterview({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [q, setQ] = useState(""); const [opts, setOpts] = useState<any[]>([]); const [f, setF] = useState<any>({ candidate_id: "", candidate_name: "", type: "phone_screen", scheduled_at: "", duration: 30, location: "" }); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  useEffect(() => { if (q.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
+  async function save() { if (!f.candidate_id || !f.scheduled_at) { setErr("Pick a candidate and a date/time"); return; } setBusy(true); const { error } = await supabase.from("interviews").insert({ candidate_id: f.candidate_id, type: f.type, scheduled_at: new Date(f.scheduled_at).toISOString(), duration: Number(f.duration) || 30, location: f.location || null, status: "scheduled" }); setBusy(false); if (error) setErr(error.message); else onSaved(); }
+  return <Modal title="Schedule interview" onClose={onClose}>
+    {f.candidate_id ? <div className="flex justify-between items-center mb-3 p-2 bg-gray-50 rounded-lg text-sm"><span>{f.candidate_name}</span><button onClick={() => setF({ ...f, candidate_id: "", candidate_name: "" })} className="text-xs text-gray-400">change</button></div>
+      : <div className="mb-3"><Field label="Candidate *" value={q} onChange={(e: any) => setQ(e.target.value)} placeholder="Search name..." />{opts.length > 0 && <div className="border rounded-lg -mt-2 divide-y">{opts.map(o => <div key={o.id} onClick={() => { setF({ ...f, candidate_id: o.id, candidate_name: `${o.first_name} ${o.last_name}` }); setOpts([]); setQ(""); }} className="px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">{o.first_name} {o.last_name}</div>)}</div>}</div>}
+    <label className="block mb-3"><span className="text-xs text-gray-500">Type</span><select value={f.type} onChange={(e: any) => setF({ ...f, type: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm mt-1">{ITYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></label>
+    <Field label="Date & time *" type="datetime-local" value={f.scheduled_at} onChange={(e: any) => setF({ ...f, scheduled_at: e.target.value })} />
+    <Field label="Duration (min)" type="number" value={f.duration} onChange={(e: any) => setF({ ...f, duration: e.target.value })} />
+    <Field label="Location / meeting link" value={f.location} onChange={(e: any) => setF({ ...f, location: e.target.value })} />
+    {err && <p className="text-xs text-red-500 mb-2">{err}</p>}
+    <button disabled={busy} onClick={save} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm">{busy ? "Saving..." : "Schedule"}</button>
+  </Modal>;
+}
+function InterviewFeedback({ iv, onClose, onSaved }: { iv: any; onClose: () => void; onSaved: () => void }) {
+  const [rec, setRec] = useState(iv.recommendation || ""); const [notes, setNotes] = useState(iv.feedback_notes || ""); const [score, setScore] = useState(iv.scorecard_data?.rating || 0); const [busy, setBusy] = useState(false);
+  async function save() { setBusy(true); await supabase.from("interviews").update({ recommendation: rec || null, feedback_notes: notes || null, scorecard_data: { rating: score }, status: "completed", feedback_submitted_at: new Date().toISOString() }).eq("id", iv.id); setBusy(false); onSaved(); }
+  return <Modal title="Interview feedback" onClose={onClose}>
+    <div className="text-sm mb-3">{iv.candidates?.first_name} {iv.candidates?.last_name} — {(iv.type || "").replace(/_/g, " ")}</div>
+    <div className="mb-3"><span className="text-xs text-gray-500">Score</span><div className="flex gap-1 mt-1">{[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => setScore(n)} className={`w-8 h-8 rounded-lg border text-sm ${score >= n ? "bg-amber-400 text-white border-amber-400" : "text-gray-300"}`}>★</button>)}</div></div>
+    <label className="block mb-3"><span className="text-xs text-gray-500">Recommendation</span><select value={rec} onChange={e => setRec(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm mt-1"><option value="">—</option>{IREC.map(r => <option key={r} value={r}>{r.replace(/_/g, " ")}</option>)}</select></label>
+    <label className="block mb-3"><span className="text-xs text-gray-500">Notes</span><textarea value={notes} onChange={e => setNotes(e.target.value)} rows={4} className="w-full px-3 py-2 border rounded-lg text-sm mt-1" /></label>
+    <button disabled={busy} onClick={save} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm">{busy ? "Saving..." : "Save feedback"}</button>
+  </Modal>;
+}
+
+/* ---------------- Tasks ---------------- */
+const TPRIO = ["low", "medium", "high", "urgent"];
+function Tasks() {
+  const { profile } = useAuth();
+  const [list, setList] = useState<any[]>([]); const [add, setAdd] = useState(false); const [filter, setFilter] = useState("open");
+  const load = useCallback(async () => { const { data } = await supabase.from("tasks").select("*,candidates(first_name,last_name)").order("due_date", { ascending: true }); setList(data || []); }, []);
+  useEffect(() => { load(); }, [load]);
+  async function toggle(t: any) { await supabase.from("tasks").update({ status: t.status === "completed" ? "pending" : "completed", completed_at: t.status === "completed" ? null : new Date().toISOString() }).eq("id", t.id); load(); }
+  const shown = list.filter(t => filter === "all" ? true : filter === "open" ? t.status !== "completed" && t.status !== "cancelled" : t.status === "completed");
+  const PC: Record<string, string> = { low: "text-gray-400", medium: "text-blue-500", high: "text-orange-500", urgent: "text-red-500" };
+  return <div><div className="flex justify-between items-center mb-4"><h1 className="text-xl font-semibold">Tasks</h1><div className="flex gap-2"><select value={filter} onChange={e => setFilter(e.target.value)} className="px-2 py-1.5 border rounded-lg text-sm"><option value="open">Open</option><option value="completed">Completed</option><option value="all">All</option></select><button onClick={() => setAdd(true)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm">+ Add task</button></div></div>
+    <div className="bg-white rounded-xl border divide-y">{shown.length === 0 ? <p className="p-6 text-center text-gray-400 text-sm">No tasks.</p> : shown.map(t => { const overdue = t.due_date && t.status !== "completed" && new Date(t.due_date) < new Date(); return <div key={t.id} className="flex items-center gap-3 px-4 py-3"><input type="checkbox" checked={t.status === "completed"} onChange={() => toggle(t)} className="w-4 h-4" /><div className="flex-1 min-w-0"><div className={`text-sm ${t.status === "completed" ? "line-through text-gray-400" : ""}`}>{t.title}</div><div className="text-[10px] text-gray-400">{t.candidates ? `${t.candidates.first_name} ${t.candidates.last_name} · ` : ""}{t.due_date ? <span className={overdue ? "text-red-500" : ""}>{new Date(t.due_date).toLocaleDateString()}</span> : "no date"}</div></div><span className={`text-[10px] font-semibold uppercase ${PC[t.priority] || ""}`}>{t.priority}</span></div>; })}</div>
+    {add && <AddTask me={profile?.id} onClose={() => setAdd(false)} onSaved={() => { setAdd(false); load(); }} />}
+  </div>;
+}
+function AddTask({ me, onClose, onSaved }: { me?: string; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState<any>({ title: "", due_date: "", priority: "medium" }); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  async function save() { if (!f.title) { setErr("Title required"); return; } setBusy(true); const { error } = await supabase.from("tasks").insert({ title: f.title, due_date: f.due_date ? new Date(f.due_date).toISOString() : null, priority: f.priority, status: "pending", created_by_id: me || null, assigned_to_id: me || null }); setBusy(false); if (error) setErr(error.message); else onSaved(); }
+  return <Modal title="Add task" onClose={onClose}><Field label="Task *" value={f.title} onChange={(e: any) => setF({ ...f, title: e.target.value })} /><Field label="Due date" type="date" value={f.due_date} onChange={(e: any) => setF({ ...f, due_date: e.target.value })} /><label className="block mb-3"><span className="text-xs text-gray-500">Priority</span><select value={f.priority} onChange={(e: any) => setF({ ...f, priority: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm mt-1">{TPRIO.map(p => <option key={p} value={p}>{p}</option>)}</select></label>{err && <p className="text-xs text-red-500 mb-2">{err}</p>}<button disabled={busy} onClick={save} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm">{busy ? "Saving..." : "Save task"}</button></Modal>;
+}
+
+/* ---------------- Reports ---------------- */
+function Reports() {
+  const [d, setD] = useState<any>(null);
+  useEffect(() => { (async () => {
+    const [{ data: ca }, { data: ap }, { data: iv }, { count: jobsOpen }, { count: placedCount }] = await Promise.all([
+      supabase.from("candidates").select("status,source,roe_rating"),
+      supabase.from("applications").select("status,created_at"),
+      supabase.from("interviews").select("status,recommendation"),
+      supabase.from("jobs").select("id", { count: "exact", head: true }).eq("status", "open"),
+      supabase.from("candidates").select("id", { count: "exact", head: true }).eq("status", "placed"),
+    ]);
+    const bySource = (ca || []).reduce((a: any, c: any) => { const k = c.source || "unknown"; a[k] = (a[k] || 0) + 1; return a; }, {});
+    const byStatus = (ca || []).reduce((a: any, c: any) => { a[c.status] = (a[c.status] || 0) + 1; return a; }, {});
+    const ivDone = (iv || []).filter((x: any) => x.status === "completed").length;
+    setD({ totalCand: ca?.length || 0, apps: ap?.length || 0, jobsOpen: jobsOpen || 0, placed: placedCount || 0, bySource, byStatus, ivTotal: iv?.length || 0, ivDone, funnel: ["new", "contacted", "screening", "interviewing", "offered", "placed"].map(s => ({ s, n: (ca || []).filter((c: any) => c.status === s).length })) });
+  })(); }, []);
+  if (!d) return <div className="py-20 text-center text-gray-400">Loading...</div>;
+  const Bar = ({ obj, max }: { obj: any; max?: number }) => { const m = max || Math.max(...Object.values(obj).map(Number) as number[], 1); return <div>{Object.entries(obj).sort((a: any, b: any) => b[1] - a[1]).slice(0, 8).map(([k, v]: any) => <div key={k} className="flex items-center gap-2 mb-1.5"><span className="text-xs text-gray-400 w-28 truncate capitalize">{(k || "").replace(/_/g, " ")}</span><div className="flex-1 h-2 bg-gray-100 rounded-full"><div className="h-full bg-blue-500 rounded-full" style={{ width: `${(v / m) * 100}%` }} /></div><span className="text-xs w-8 text-right">{v}</span></div>)}</div>; };
+  return <div><h1 className="text-xl font-semibold mb-6">Reports</h1>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">{[["Candidates", d.totalCand], ["Open jobs", d.jobsOpen], ["Applications", d.apps], ["Placed", d.placed], ["Interviews", d.ivTotal], ["Interviews done", d.ivDone]].map(([l, v]) => <div key={l as string} className="bg-white rounded-xl border p-4"><div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">{l}</div><div className="text-2xl font-semibold">{v}</div></div>)}</div>
+    <div className="grid md:grid-cols-2 gap-4">
+      <div className="bg-white rounded-xl border p-4"><h3 className="text-sm text-gray-500 mb-3">Hiring funnel</h3>{d.funnel.map((f: any) => <div key={f.s} className="flex items-center gap-2 mb-1.5"><span className="text-xs text-gray-400 w-24 capitalize">{f.s}</span><div className="flex-1 h-2 bg-gray-100 rounded-full"><div className="h-full bg-emerald-500 rounded-full" style={{ width: `${(f.n / Math.max(d.funnel[0].n, 1)) * 100}%` }} /></div><span className="text-xs w-8 text-right">{f.n}</span></div>)}</div>
+      <div className="bg-white rounded-xl border p-4"><h3 className="text-sm text-gray-500 mb-3">Source effectiveness</h3><Bar obj={d.bySource} /></div>
+      <div className="bg-white rounded-xl border p-4 md:col-span-2"><h3 className="text-sm text-gray-500 mb-3">Candidates by status</h3><Bar obj={d.byStatus} /></div>
+    </div>
+  </div>;
+}
+
 /* ---------------- Settings: users & roles ---------------- */
 function Settings() {
   const { profile } = useAuth();
@@ -204,7 +302,7 @@ function Login() {
 
 /* ---------------- Shell ---------------- */
 const NV: { id: Section; l: string; i: string }[] = [
-  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "settings", l: "Settings", i: "⚙️" }];
+  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "settings", l: "Settings", i: "⚙️" }];
 
 export default function Home() {
   const { profile, loading, signOut } = useAuth();
@@ -225,8 +323,9 @@ export default function Home() {
       case "job": return allowed("jobs") ? <JobDetail nav={nav} pr={pr} /> : <Denied />;
       case "clients": return allowed("clients") ? <Clients nav={nav} editable={editable} /> : <Denied />;
       case "client": return allowed("clients") ? <ClientDetail nav={nav} pr={pr} /> : <Denied />;
-      case "interviews": return allowed("interviews") ? <ComingSoon title="Interviews" note="Scheduling, calendar sync, and feedback forms are next on the roadmap." /> : <Denied />;
-      case "tasks": return allowed("tasks") ? <ComingSoon title="Tasks" note="Assignable tasks and reminders are next on the roadmap." /> : <Denied />;
+      case "interviews": return allowed("interviews") ? <Interviews nav={nav} editable={editable} /> : <Denied />;
+      case "tasks": return allowed("tasks") ? <Tasks /> : <Denied />;
+      case "reports": return allowed("reports") ? <Reports /> : <Denied />;
       case "search": return allowed("search") ? <Search nav={nav} /> : <Denied />;
       case "settings": return canManageUsers(role) ? <Settings /> : <Denied />;
       default: return <Dash nav={nav} />;

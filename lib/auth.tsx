@@ -14,14 +14,14 @@ export type Profile = {
 };
 
 // Nav sections each role can see.
-export const SECTIONS = ["dash", "cands", "pipeline", "jobs", "clients", "interviews", "tasks", "search", "settings"] as const;
+export const SECTIONS = ["dash", "cands", "pipeline", "jobs", "clients", "interviews", "tasks", "reports", "search", "settings"] as const;
 export type Section = (typeof SECTIONS)[number];
 
 const ACCESS: Record<Role, Section[]> = {
-  super_admin: ["dash", "cands", "pipeline", "jobs", "clients", "interviews", "tasks", "search", "settings"],
-  admin: ["dash", "cands", "pipeline", "jobs", "clients", "interviews", "tasks", "search", "settings"],
-  recruiter: ["dash", "cands", "pipeline", "jobs", "clients", "interviews", "tasks", "search"],
-  hiring_manager: ["dash", "cands", "pipeline", "jobs", "interviews"],
+  super_admin: ["dash", "cands", "pipeline", "jobs", "clients", "interviews", "tasks", "reports", "search", "settings"],
+  admin: ["dash", "cands", "pipeline", "jobs", "clients", "interviews", "tasks", "reports", "search", "settings"],
+  recruiter: ["dash", "cands", "pipeline", "jobs", "clients", "interviews", "tasks", "reports", "search"],
+  hiring_manager: ["dash", "cands", "pipeline", "jobs", "interviews", "reports"],
   client_user: ["dash", "jobs", "cands"],
   candidate_user: ["dash"],
 };
