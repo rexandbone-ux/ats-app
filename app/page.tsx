@@ -14,6 +14,9 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   return <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={onClose}><div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center px-5 py-3 border-b"><h3 className="font-semibold">{title}</h3><button onClick={onClose} className="text-gray-400 text-xl leading-none">&times;</button></div><div className="p-5">{children}</div></div></div>;
 }
 function Field({ label, ...p }: any) { return <label className="block mb-3"><span className="text-xs text-gray-500">{label}</span><input {...p} className="w-full px-3 py-2 border rounded-lg text-sm mt-1" /></label>; }
+async function logActivity(type: string, description: string, refs: { candidate_id?: string; job_id?: string; client_id?: string; application_id?: string }, userId?: string) {
+  try { await supabase.from("activities").insert({ type, description, ...refs, user_id: userId || null }); } catch { /* non-blocking */ }
+}
 function rawDbx(u: string) { return u.replace("www.dropbox.com", "dl.dropboxusercontent.com").replace(/([?&])dl=0/, "$1raw=1"); }
 function embedOf(url: string): { type: string; src: string } | null {
   if (!url) return null; const u = url.trim();
@@ -93,15 +96,16 @@ function AddCandidate({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 /* ---------------- Candidate detail ---------------- */
 function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any; editable: boolean }) {
   const { profile } = useAuth();
-  const [c, setC] = useState<any>(null); const [tab, setTab] = useState("overview"); const [apps, setApps] = useState<any[]>([]); const [notes, setNotes] = useState<any[]>([]); const [note, setNote] = useState(""); const [scoring, setScoring] = useState(false); const [tag, setTag] = useState(""); const [emailOpen, setEmailOpen] = useState(false);
+  const [c, setC] = useState<any>(null); const [tab, setTab] = useState("overview"); const [apps, setApps] = useState<any[]>([]); const [notes, setNotes] = useState<any[]>([]); const [note, setNote] = useState(""); const [scoring, setScoring] = useState(false); const [tag, setTag] = useState(""); const [emailOpen, setEmailOpen] = useState(false); const [acts, setActs] = useState<any[]>([]);
   const load = useCallback(async () => {
     const { data } = await supabase.from("candidates").select("*").eq("id", pr.id).single(); setC(data);
     const { data: ap } = await supabase.from("applications").select("id,status,created_at,job_id,jobs(title)").eq("candidate_id", pr.id); setApps(ap || []);
     const { data: nt } = await supabase.from("notes").select("*").eq("candidate_id", pr.id).order("created_at", { ascending: false }); setNotes(nt || []);
+    const { data: ac } = await supabase.from("activities").select("*").eq("candidate_id", pr.id).order("created_at", { ascending: false }).limit(100); setActs(ac || []);
   }, [pr.id]);
   useEffect(() => { load(); }, [load]);
-  async function setStatus(s: string) { if (!c) return; await supabase.from("candidates").update({ status: s }).eq("id", c.id); setC({ ...c, status: s }); }
-  async function addNote() { if (!note.trim()) return; await supabase.from("notes").insert({ candidate_id: pr.id, content: note, user_id: profile?.id }); setNote(""); load(); }
+  async function setStatus(s: string) { if (!c) return; const prev = c.status; await supabase.from("candidates").update({ status: s }).eq("id", c.id); setC({ ...c, status: s }); logActivity("stage_change", `Status: ${prev} → ${s}`, { candidate_id: c.id }, profile?.id).then(load); }
+  async function addNote() { if (!note.trim()) return; await supabase.from("notes").insert({ candidate_id: pr.id, content: note, user_id: profile?.id }); await logActivity("note", note.slice(0, 140), { candidate_id: pr.id }, profile?.id); setNote(""); load(); }
   async function addTag() { const t = tag.trim(); if (!t || !c) return; const tags = Array.from(new Set([...(c.tags || []), t])); await supabase.from("candidates").update({ tags }).eq("id", c.id); setC({ ...c, tags }); setTag(""); }
   async function removeTag(t: string) { if (!c) return; const tags = (c.tags || []).filter((x: string) => x !== t); await supabase.from("candidates").update({ tags }).eq("id", c.id); setC({ ...c, tags }); }
   async function runAI() {
@@ -110,7 +114,8 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
     setScoring(false);
   }
   if (!c) return <div className="py-20 text-center text-gray-400">Loading...</div>;
-  const tabs = editable ? ["overview", "responses", "notes", "ai"] : ["overview", "responses", "ai"];
+  const tabs = editable ? ["overview", "responses", "notes", "timeline", "ai"] : ["overview", "responses", "timeline", "ai"];
+  const ICON: Record<string, string> = { stage_change: "→", note: "✎", email: "✉", call: "☎", text: "💬", interview: "🗓", placement: "🤝", application_received: "📥", candidate_scored: "★" };
   return <div>
     <button onClick={() => nav("cands")} className="text-sm text-gray-400 mb-4 block">&larr; Back</button>
     <div className="bg-white rounded-xl border p-5 mb-4"><div className="flex gap-4"><Av n={`${c.first_name} ${c.last_name}`} sz="w-14 h-14 text-xl" /><div className="flex-1"><div className="flex items-center gap-3 mb-1 flex-wrap"><h1 className="text-lg font-semibold">{c.first_name} {c.last_name}</h1><B s={c.status} />{c.ai_recommendation && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${c.ai_recommendation === "ADVANCE" ? "bg-green-100 text-green-700" : c.ai_recommendation === "REJECT" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>{c.ai_recommendation}{c.overall_score ? ` ${c.overall_score}` : ""}</span>}</div><div className="text-sm text-gray-500">{c.current_title}{c.current_company ? ` at ${c.current_company}` : ""}</div><div className="flex gap-4 mt-2 text-xs text-gray-400 flex-wrap">{c.email && <span>{c.email}</span>}{c.phone && <span>{c.phone}</span>}{(c.city || c.state) && <span>{[c.city, c.state].filter(Boolean).join(", ")}</span>}{c.experience_years ? <span>{c.experience_years}yr exp</span> : null}</div></div>{editable && <div className="flex flex-col gap-2 self-start items-end"><select value={c.status} onChange={e => setStatus(e.target.value)} className="h-9 px-2 border rounded-lg text-xs">{CAND_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}</select><button onClick={() => setEmailOpen(true)} className="text-xs px-3 py-1.5 border rounded-lg">✉ Email</button></div>}</div>
@@ -130,6 +135,7 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
       {!c.screening_responses && !c.application_answers && !c.resume_text && <div className="bg-white rounded-xl border p-10 text-center text-gray-400 text-sm">No responses recorded.</div>}
     </div>}
     {tab === "notes" && <div className="bg-white rounded-xl border p-4"><div className="flex gap-2 mb-4"><input value={note} onChange={e => setNote(e.target.value)} onKeyDown={e => e.key === "Enter" && addNote()} placeholder="Add a note..." className="flex-1 px-3 py-2 border rounded-lg text-sm" /><button onClick={addNote} className="bg-slate-800 text-white px-3 rounded-lg text-sm">Add</button></div>{notes.length === 0 ? <p className="text-xs text-gray-400">No notes yet.</p> : notes.map(n => <div key={n.id} className="py-2 border-b border-gray-50"><div className="text-sm">{n.content}</div><div className="text-[10px] text-gray-400 mt-0.5">{new Date(n.created_at).toLocaleString()}</div></div>)}</div>}
+    {tab === "timeline" && <div className="bg-white rounded-xl border p-4">{acts.length === 0 ? <p className="text-xs text-gray-400">No activity yet. Status changes, notes, emails, and placements will appear here.</p> : <div className="space-y-3">{acts.map(a => <div key={a.id} className="flex gap-3"><div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-xs shrink-0">{ICON[a.type] || "•"}</div><div className="flex-1 min-w-0"><div className="text-sm">{a.description || a.type}</div><div className="text-[10px] text-gray-400">{a.type.replace(/_/g, " ")} · {new Date(a.created_at).toLocaleString()}</div></div></div>)}</div>}</div>}
     {tab === "ai" && (() => { const a: any = c.ai_analysis && typeof c.ai_analysis === "object" ? c.ai_analysis : null; return <div className="bg-white rounded-xl border p-6">{a ? <div>
       <div className="flex items-center gap-4 mb-4"><div className="w-16 h-16 rounded-full bg-slate-800 text-white flex items-center justify-center text-2xl font-bold">{c.overall_score ?? a.score ?? "–"}</div><div><span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${c.ai_recommendation === "ADVANCE" ? "bg-green-100 text-green-700" : c.ai_recommendation === "REJECT" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>{c.ai_recommendation || a.recommendation}</span><div className="text-xs text-gray-400 mt-1">AI assessment · score out of 100</div></div></div>
       {a.summary && <p className="text-sm text-gray-700 mb-4">{a.summary}</p>}
@@ -154,6 +160,7 @@ function EmailModal({ cand, onClose }: { cand: any; onClose: () => void }) {
     let status = "queued";
     try { const { error } = await supabase.functions.invoke("resend-email", { body: { to: cand.email, subject, html: bodyHtml } }); status = error ? "failed" : "sent"; } catch { status = "failed"; }
     await supabase.from("emails").insert({ candidate_id: cand.id, user_id: profile?.id, to_email: cand.email, subject, body_html: bodyHtml, direction: "outbound", status, sent_at: status === "sent" ? new Date().toISOString() : null });
+    await logActivity("email", `Email: ${subject}`, { candidate_id: cand.id }, profile?.id);
     setBusy(false);
     if (status === "sent") onClose();
     else setMsg("Saved to this candidate's email history, but live delivery isn't active yet — connect a verified sender (Resend domain or Gmail) and it'll send for real.");
@@ -207,17 +214,25 @@ function AddClient({ onClose, onSaved }: { onClose: () => void; onSaved: () => v
   async function save() { if (!f.company_name) { setErr("Company name required"); return; } setBusy(true); const { error } = await supabase.from("clients").insert({ ...f, status: "active" }); setBusy(false); if (error) setErr(error.message); else onSaved(); }
   return <Modal title="Add client" onClose={onClose}><Field label="Company name *" value={f.company_name} onChange={(e: any) => setF({ ...f, company_name: e.target.value })} /><Field label="Industry" value={f.industry} onChange={(e: any) => setF({ ...f, industry: e.target.value })} /><Field label="Website" value={f.website} onChange={(e: any) => setF({ ...f, website: e.target.value })} />{err && <p className="text-xs text-red-500 mb-2">{err}</p>}<button disabled={busy} onClick={save} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm">{busy ? "Saving..." : "Save client"}</button></Modal>;
 }
-function ClientDetail({ nav, pr }: { nav: (p: string, d?: any) => void; pr: any }) {
-  const [cl, setCl] = useState<any>(null); const [jobs, setJobs] = useState<any[]>([]); const [contacts, setContacts] = useState<any[]>([]);
-  useEffect(() => { (async () => { const { data } = await supabase.from("clients").select("*").eq("id", pr.id).single(); setCl(data); const { data: j } = await supabase.from("jobs").select("id,title,status,location").eq("client_id", pr.id); setJobs(j || []); const { data: ct } = await supabase.from("client_contacts").select("*").eq("client_id", pr.id); setContacts(ct || []); })(); }, [pr.id]);
+function ClientDetail({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any; editable: boolean }) {
+  const [cl, setCl] = useState<any>(null); const [jobs, setJobs] = useState<any[]>([]); const [contacts, setContacts] = useState<any[]>([]); const [addC, setAddC] = useState(false);
+  const load = useCallback(async () => { const { data } = await supabase.from("clients").select("*").eq("id", pr.id).single(); setCl(data); const { data: j } = await supabase.from("jobs").select("id,title,status,location").eq("client_id", pr.id); setJobs(j || []); const { data: ct } = await supabase.from("client_contacts").select("*").eq("client_id", pr.id); setContacts(ct || []); }, [pr.id]);
+  useEffect(() => { load(); }, [load]);
   if (!cl) return <div className="py-20 text-center text-gray-400">Loading...</div>;
   return <div><button onClick={() => nav("clients")} className="text-sm text-gray-400 mb-4 block">&larr; Back</button>
     <div className="bg-white rounded-xl border p-5 mb-4 flex justify-between items-start"><div className="flex items-center gap-3"><Av n={cl.company_name} sz="w-12 h-12 text-lg" /><div><h1 className="text-lg font-semibold capitalize">{cl.company_name}</h1><div className="text-sm text-gray-500">{cl.industry || ""}{cl.website ? ` · ${cl.website}` : ""}</div></div></div><B s={cl.status} /></div>
     <div className="grid md:grid-cols-2 gap-4">
       <div><h3 className="text-sm text-gray-500 mb-2">Positions ({jobs.length})</h3><div className="bg-white rounded-xl border divide-y">{jobs.length === 0 ? <p className="p-4 text-xs text-gray-400">None</p> : jobs.map(j => <div key={j.id} onClick={() => nav("job", { id: j.id })} className="flex justify-between items-center px-4 py-2.5 cursor-pointer hover:bg-gray-50"><div><div className="text-sm">{j.title}</div><div className="text-[10px] text-gray-400">{j.location || "Remote"}</div></div><B s={j.status} /></div>)}</div></div>
-      <div><h3 className="text-sm text-gray-500 mb-2">Contacts ({contacts.length})</h3><div className="bg-white rounded-xl border divide-y">{contacts.length === 0 ? <p className="p-4 text-xs text-gray-400">None</p> : contacts.map(ct => <div key={ct.id} className="px-4 py-2.5"><div className="text-sm">{ct.first_name} {ct.last_name}{ct.is_primary ? <span className="ml-2 text-[9px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded-full">Primary</span> : ""}</div><div className="text-[10px] text-gray-400">{[ct.title, ct.email, ct.phone].filter(Boolean).join(" · ")}</div></div>)}</div></div>
+      <div><div className="flex justify-between items-center mb-2"><h3 className="text-sm text-gray-500">Contacts ({contacts.length})</h3>{editable && <button onClick={() => setAddC(true)} className="text-xs text-blue-600">+ Add</button>}</div><div className="bg-white rounded-xl border divide-y">{contacts.length === 0 ? <p className="p-4 text-xs text-gray-400">None</p> : contacts.map(ct => <div key={ct.id} className="px-4 py-2.5"><div className="text-sm">{ct.first_name} {ct.last_name}{ct.is_primary ? <span className="ml-2 text-[9px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded-full">Primary</span> : ""}</div><div className="text-[10px] text-gray-400">{[ct.title, ct.email, ct.phone].filter(Boolean).join(" · ")}</div></div>)}</div></div>
     </div>
+    {addC && <AddContact clientId={pr.id} onClose={() => setAddC(false)} onSaved={() => { setAddC(false); load(); }} />}
   </div>;
+}
+
+function AddContact({ clientId, onClose, onSaved }: { clientId: string; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState<any>({ first_name: "", last_name: "", title: "", email: "", phone: "", is_primary: false }); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  async function save() { if (!f.first_name) { setErr("First name required"); return; } setBusy(true); const { error } = await supabase.from("client_contacts").insert({ ...f, client_id: clientId }); setBusy(false); if (error) setErr(error.message); else onSaved(); }
+  return <Modal title="Add contact" onClose={onClose}><Field label="First name *" value={f.first_name} onChange={(e: any) => setF({ ...f, first_name: e.target.value })} /><Field label="Last name" value={f.last_name} onChange={(e: any) => setF({ ...f, last_name: e.target.value })} /><Field label="Title (e.g. DON, Admin)" value={f.title} onChange={(e: any) => setF({ ...f, title: e.target.value })} /><Field label="Email" value={f.email} onChange={(e: any) => setF({ ...f, email: e.target.value })} /><Field label="Phone" value={f.phone} onChange={(e: any) => setF({ ...f, phone: e.target.value })} /><label className="flex items-center gap-2 mb-3 text-sm"><input type="checkbox" checked={f.is_primary} onChange={e => setF({ ...f, is_primary: e.target.checked })} />Primary contact</label>{err && <p className="text-xs text-red-500 mb-2">{err}</p>}<button disabled={busy} onClick={save} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm">{busy ? "Saving..." : "Save contact"}</button></Modal>;
 }
 
 /* ---------------- Pipeline Kanban ---------------- */
@@ -266,7 +281,7 @@ function Interviews({ nav, editable }: { nav: (p: string, d?: any) => void; edit
 function ScheduleInterview({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [q, setQ] = useState(""); const [opts, setOpts] = useState<any[]>([]); const [f, setF] = useState<any>({ candidate_id: "", candidate_name: "", type: "phone_screen", scheduled_at: "", duration: 30, location: "" }); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   useEffect(() => { if (q.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
-  async function save() { if (!f.candidate_id || !f.scheduled_at) { setErr("Pick a candidate and a date/time"); return; } setBusy(true); const { error } = await supabase.from("interviews").insert({ candidate_id: f.candidate_id, type: f.type, scheduled_at: new Date(f.scheduled_at).toISOString(), duration: Number(f.duration) || 30, location: f.location || null, status: "scheduled" }); setBusy(false); if (error) setErr(error.message); else onSaved(); }
+  async function save() { if (!f.candidate_id || !f.scheduled_at) { setErr("Pick a candidate and a date/time"); return; } setBusy(true); const { error } = await supabase.from("interviews").insert({ candidate_id: f.candidate_id, type: f.type, scheduled_at: new Date(f.scheduled_at).toISOString(), duration: Number(f.duration) || 30, location: f.location || null, status: "scheduled" }); setBusy(false); if (error) { setErr(error.message); return; } await logActivity("interview", `Interview scheduled (${f.type.replace(/_/g, " ")})`, { candidate_id: f.candidate_id }); onSaved(); }
   return <Modal title="Schedule interview" onClose={onClose}>
     {f.candidate_id ? <div className="flex justify-between items-center mb-3 p-2 bg-gray-50 rounded-lg text-sm"><span>{f.candidate_name}</span><button onClick={() => setF({ ...f, candidate_id: "", candidate_name: "" })} className="text-xs text-gray-400">change</button></div>
       : <div className="mb-3"><Field label="Candidate *" value={q} onChange={(e: any) => setQ(e.target.value)} placeholder="Search name..." />{opts.length > 0 && <div className="border rounded-lg -mt-2 divide-y">{opts.map(o => <div key={o.id} onClick={() => { setF({ ...f, candidate_id: o.id, candidate_name: `${o.first_name} ${o.last_name}` }); setOpts([]); setQ(""); }} className="px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">{o.first_name} {o.last_name}</div>)}</div>}</div>}
@@ -339,6 +354,46 @@ function Reports() {
   </div>;
 }
 
+/* ---------------- Placements ---------------- */
+function Placements({ nav, editable }: { nav: (p: string, d?: any) => void; editable: boolean }) {
+  const [list, setList] = useState<any[]>([]); const [add, setAdd] = useState(false);
+  const load = useCallback(async () => { const { data } = await supabase.from("placements").select("*,candidates(first_name,last_name),clients(company_name),jobs(title)").order("created_at", { ascending: false }); setList(data || []); }, []);
+  useEffect(() => { load(); }, [load]);
+  const active = list.filter(p => p.status === "active").length;
+  const margin = (p: any) => (p.client_bill_rate && p.candidate_pay_rate) ? `$${(p.client_bill_rate - p.candidate_pay_rate).toFixed(2)}/${p.pay_period || "hr"}` : "—";
+  return <div><div className="flex justify-between items-center mb-4"><h1 className="text-xl font-semibold">Placements ({list.length})</h1>{editable && <button onClick={() => setAdd(true)} className="bg-slate-800 text-white px-3 py-1.5 rounded-lg text-sm">+ Record placement</button>}</div>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">{[["Active", active], ["Total", list.length]].map(([l, v]) => <div key={l as string} className="bg-white rounded-xl border p-4"><div className="text-[10px] text-gray-400 uppercase tracking-wider mb-1">{l}</div><div className="text-2xl font-semibold">{v}</div></div>)}</div>
+    <div className="bg-white rounded-xl border overflow-hidden"><table className="w-full text-sm"><thead><tr className="border-b text-left">{["Candidate", "Client", "Role", "Pay", "Bill", "Margin", "Start", "Status"].map(h => <th key={h} className="px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase">{h}</th>)}</tr></thead><tbody className="divide-y divide-gray-50">{list.length === 0 ? <tr><td colSpan={8} className="p-6 text-center text-gray-400 text-sm">No placements yet.</td></tr> : list.map(p => <tr key={p.id} className="hover:bg-gray-50"><td className="px-3 py-2 font-medium cursor-pointer" onClick={() => p.candidate_id && nav("det", { id: p.candidate_id })}>{p.candidates?.first_name} {p.candidates?.last_name}</td><td className="px-3 py-2 capitalize">{p.clients?.company_name || "—"}</td><td className="px-3 py-2 text-gray-500">{p.jobs?.title || "—"}</td><td className="px-3 py-2">{p.candidate_pay_rate ? `$${p.candidate_pay_rate}` : "—"}</td><td className="px-3 py-2">{p.client_bill_rate ? `$${p.client_bill_rate}` : "—"}</td><td className="px-3 py-2 text-green-700">{margin(p)}</td><td className="px-3 py-2 text-xs text-gray-400">{p.start_date ? new Date(p.start_date).toLocaleDateString() : "—"}</td><td className="px-3 py-2"><B s={p.status} /></td></tr>)}</tbody></table></div>
+    {add && <RecordPlacement onClose={() => setAdd(false)} onSaved={() => { setAdd(false); load(); }} />}
+  </div>;
+}
+function RecordPlacement({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { profile } = useAuth();
+  const [q, setQ] = useState(""); const [opts, setOpts] = useState<any[]>([]); const [clients, setClients] = useState<any[]>([]); const [jobs, setJobs] = useState<any[]>([]);
+  const [f, setF] = useState<any>({ candidate_id: "", candidate_name: "", client_id: "", job_id: "", candidate_pay_rate: "", client_bill_rate: "", pay_period: "hour", start_date: "" }); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  useEffect(() => { supabase.from("clients").select("id,company_name").order("company_name").then(({ data }) => setClients(data || [])); supabase.from("jobs").select("id,title").order("created_at", { ascending: false }).then(({ data }) => setJobs(data || [])); }, []);
+  useEffect(() => { if (q.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
+  async function save() {
+    if (!f.candidate_id || !f.client_id) { setErr("Pick a candidate and a client"); return; }
+    setBusy(true);
+    const { error } = await supabase.from("placements").insert({ candidate_id: f.candidate_id, client_id: f.client_id, job_id: f.job_id || null, status: "active", start_date: f.start_date || null, candidate_pay_rate: f.candidate_pay_rate ? Number(f.candidate_pay_rate) : null, client_bill_rate: f.client_bill_rate ? Number(f.client_bill_rate) : null, pay_period: f.pay_period });
+    if (error) { setBusy(false); setErr(error.message); return; }
+    await supabase.from("candidates").update({ status: "placed" }).eq("id", f.candidate_id);
+    await logActivity("placement", `Placed ${f.candidate_name}`, { candidate_id: f.candidate_id, client_id: f.client_id, job_id: f.job_id || undefined }, profile?.id);
+    setBusy(false); onSaved();
+  }
+  return <Modal title="Record placement" onClose={onClose}>
+    {f.candidate_id ? <div className="flex justify-between items-center mb-3 p-2 bg-gray-50 rounded-lg text-sm"><span>{f.candidate_name}</span><button onClick={() => setF({ ...f, candidate_id: "", candidate_name: "" })} className="text-xs text-gray-400">change</button></div>
+      : <div className="mb-3"><Field label="Candidate *" value={q} onChange={(e: any) => setQ(e.target.value)} placeholder="Search name..." />{opts.length > 0 && <div className="border rounded-lg -mt-2 divide-y">{opts.map(o => <div key={o.id} onClick={() => { setF({ ...f, candidate_id: o.id, candidate_name: `${o.first_name} ${o.last_name}` }); setOpts([]); setQ(""); }} className="px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">{o.first_name} {o.last_name}</div>)}</div>}</div>}
+    <label className="block mb-3"><span className="text-xs text-gray-500">Client *</span><select value={f.client_id} onChange={(e: any) => setF({ ...f, client_id: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm mt-1"><option value="">— select —</option>{clients.map(c => <option key={c.id} value={c.id}>{c.company_name}</option>)}</select></label>
+    <label className="block mb-3"><span className="text-xs text-gray-500">Role (optional)</span><select value={f.job_id} onChange={(e: any) => setF({ ...f, job_id: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm mt-1"><option value="">— none —</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}</select></label>
+    <div className="grid grid-cols-3 gap-2"><Field label="Pay rate" type="number" value={f.candidate_pay_rate} onChange={(e: any) => setF({ ...f, candidate_pay_rate: e.target.value })} /><Field label="Bill rate" type="number" value={f.client_bill_rate} onChange={(e: any) => setF({ ...f, client_bill_rate: e.target.value })} /><label className="block mb-3"><span className="text-xs text-gray-500">Per</span><select value={f.pay_period} onChange={(e: any) => setF({ ...f, pay_period: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm mt-1"><option value="hour">hour</option><option value="month">month</option><option value="year">year</option></select></label></div>
+    <Field label="Start date" type="date" value={f.start_date} onChange={(e: any) => setF({ ...f, start_date: e.target.value })} />
+    {err && <p className="text-xs text-red-500 mb-2">{err}</p>}
+    <button disabled={busy} onClick={save} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm">{busy ? "Saving..." : "Record placement"}</button>
+  </Modal>;
+}
+
 /* ---------------- Settings: users & roles ---------------- */
 function Settings() {
   const { profile } = useAuth();
@@ -377,7 +432,7 @@ function Login() {
 
 /* ---------------- Shell ---------------- */
 const NV: { id: Section; l: string; i: string }[] = [
-  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "settings", l: "Settings", i: "⚙️" }];
+  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "settings", l: "Settings", i: "⚙️" }];
 
 export default function Home() {
   const { profile, loading, signOut } = useAuth();
@@ -397,7 +452,8 @@ export default function Home() {
       case "jobs": return allowed("jobs") ? <Jobs nav={nav} editable={editable} /> : <Denied />;
       case "job": return allowed("jobs") ? <JobDetail nav={nav} pr={pr} editable={editable} /> : <Denied />;
       case "clients": return allowed("clients") ? <Clients nav={nav} editable={editable} /> : <Denied />;
-      case "client": return allowed("clients") ? <ClientDetail nav={nav} pr={pr} /> : <Denied />;
+      case "client": return allowed("clients") ? <ClientDetail nav={nav} pr={pr} editable={editable} /> : <Denied />;
+      case "placements": return allowed("placements") ? <Placements nav={nav} editable={editable} /> : <Denied />;
       case "interviews": return allowed("interviews") ? <Interviews nav={nav} editable={editable} /> : <Denied />;
       case "tasks": return allowed("tasks") ? <Tasks /> : <Denied />;
       case "reports": return allowed("reports") ? <Reports /> : <Denied />;
