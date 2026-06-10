@@ -20,7 +20,7 @@ function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
   const [d, setD] = useState<any>(null); const [rec, setRec] = useState<C[]>([]);
   useEffect(() => { (async () => {
     const [{ data: ca }, { data: jo }, { data: ap }, { data: cl }, { data: st }] = await Promise.all([
-      supabase.from("candidates").select("id,status,source"), supabase.from("jobs").select("id,status"), supabase.from("applications").select("id"), supabase.from("clients").select("id,status"), supabase.from("pipeline_stages").select("*").order("sort_order")]);
+      supabase.from("candidates").select("id,status,source").limit(10000), supabase.from("jobs").select("id,status").limit(2000), supabase.from("applications").select("id").limit(20000), supabase.from("clients").select("id,status").limit(2000), supabase.from("pipeline_stages").select("*").order("sort_order")]);
     const { data: r } = await supabase.from("candidates").select("*").order("created_at", { ascending: false }).limit(8);
     setD({ t: ca?.length || 0, oj: jo?.filter((j: any) => j.status === "open").length || 0, ap: ap?.length || 0, ac: cl?.filter((c: any) => c.status === "active").length || 0, sb: (ca || []).reduce((a: any, c: any) => { a[c.status] = (a[c.status] || 0) + 1; return a; }, {}), src: (ca || []).reduce((a: any, c: any) => { a[c.source || "unknown"] = (a[c.source || "unknown"] || 0) + 1; return a; }, {}), st: st || [] }); setRec(r || []);
   })(); }, []);
@@ -282,8 +282,8 @@ function Reports() {
   const [d, setD] = useState<any>(null);
   useEffect(() => { (async () => {
     const [{ data: ca }, { data: ap }, { data: iv }, { count: jobsOpen }, { count: placedCount }] = await Promise.all([
-      supabase.from("candidates").select("status,source,roe_rating"),
-      supabase.from("applications").select("status,created_at"),
+      supabase.from("candidates").select("status,source,roe_rating").limit(10000),
+      supabase.from("applications").select("status,created_at").limit(20000),
       supabase.from("interviews").select("status,recommendation"),
       supabase.from("jobs").select("id", { count: "exact", head: true }).eq("status", "open"),
       supabase.from("candidates").select("id", { count: "exact", head: true }).eq("status", "placed"),
