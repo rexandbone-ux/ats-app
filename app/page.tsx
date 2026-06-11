@@ -614,10 +614,11 @@ function Softphone() {
   }, []);
   return <>
     <button onClick={() => setOpen(o => !o)} title="Zoom Phone" className="fixed bottom-20 right-5 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg z-50 flex items-center justify-center hover:bg-blue-700">📞</button>
-    <div className={`fixed bottom-36 right-5 w-80 h-[34rem] bg-white rounded-2xl shadow-2xl border z-50 overflow-hidden flex flex-col ${open ? "" : "hidden"}`}>
+    {open && <div className="fixed bottom-36 right-5 w-80 h-[34rem] bg-white rounded-2xl shadow-2xl border z-50 overflow-hidden flex flex-col">
       <div className="flex justify-between items-center px-3 py-2 bg-blue-600 text-white"><span className="text-sm font-medium">📞 Zoom Phone</span><button onClick={() => setOpen(false)} className="text-blue-100 hover:text-white text-lg leading-none">×</button></div>
       <iframe ref={iframeRef} src={ZOOM_EMBED_URL} allow="microphone; autoplay; clipboard-write" className="flex-1 w-full border-0" />
-    </div>
+      <div className="px-3 py-1.5 text-[10px] text-gray-400 border-t leading-tight">Blank or won&rsquo;t sign in? Zoom only loads the phone on domains approved in your Zoom Marketplace app. <a href="https://marketplace.zoom.us/develop/create" target="_blank" rel="noreferrer" className="text-blue-600">Set it up →</a></div>
+    </div>}
   </>;
 }
 
