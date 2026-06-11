@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Role, Section } from "@/lib/auth";
 
@@ -186,7 +186,7 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
   const ICON: Record<string, string> = { stage_change: "→", note: "✎", email: "✉", call: "☎", text: "💬", interview: "🗓", placement: "🤝", application_received: "📥", candidate_scored: "★" };
   return <div>
     <button onClick={() => nav("cands")} className="text-sm text-gray-400 mb-4 block">&larr; Back</button>
-    <div className="bg-white rounded-xl border p-5 mb-4"><div className="flex gap-4"><Av n={`${c.first_name} ${c.last_name}`} sz="w-14 h-14 text-xl" /><div className="flex-1"><div className="flex items-center gap-3 mb-1 flex-wrap"><h1 className="text-lg font-semibold">{c.first_name} {c.last_name}</h1><B s={c.status} />{c.ai_recommendation && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${c.ai_recommendation === "ADVANCE" ? "bg-green-100 text-green-700" : c.ai_recommendation === "REJECT" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>{c.ai_recommendation}{c.overall_score ? ` ${c.overall_score}` : ""}</span>}</div><div className="text-sm text-gray-500">{c.current_title}{c.current_company ? ` at ${c.current_company}` : ""}</div><div className="flex gap-4 mt-2 text-xs text-gray-400 flex-wrap">{c.email && <span>{c.email}</span>}{c.phone && <span>{c.phone}</span>}{(c.city || c.state) && <span>{[c.city, c.state].filter(Boolean).join(", ")}</span>}{c.experience_years ? <span>{c.experience_years}yr exp</span> : null}</div></div>{editable && <div className="flex flex-col gap-2 self-start items-end"><select value={c.status} onChange={e => setStatus(e.target.value)} className="h-9 px-2 border rounded-lg text-xs">{CAND_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}</select><select value={c.owner_id || ""} onChange={e => setOwner(e.target.value)} className="h-9 px-2 border rounded-lg text-xs"><option value="">Unassigned</option>{recruiters.map(r => <option key={r.id} value={r.id}>{r.first_name || r.email}</option>)}</select><div className="flex gap-1.5 flex-wrap justify-end"><button onClick={() => setAddPipe(true)} className="text-xs px-2.5 py-1.5 border rounded-lg">+ Pipeline</button><button onClick={() => setEmailOpen(true)} className="text-xs px-2.5 py-1.5 border rounded-lg">✉ Email</button><button onClick={() => c.phone ? (window.location.href = "zoomphonecall://" + c.phone.replace(/[^0-9+]/g, "")) : alert("No phone number on file.")} title="Call via Zoom Phone" className="text-xs px-2.5 py-1.5 border rounded-lg">📞 Zoom call</button><button onClick={() => c.phone ? (window.location.href = "zoomphonesms://" + c.phone.replace(/[^0-9+]/g, "")) : alert("No phone number on file.")} title="Text via Zoom Phone" className="text-xs px-2.5 py-1.5 border rounded-lg">💬 Zoom SMS</button><button onClick={callC} title="Call via Twilio (logs to timeline)" className="text-xs px-2.5 py-1.5 border rounded-lg">☎ Call</button><button onClick={smsC} className="text-xs px-2.5 py-1.5 border rounded-lg">💬 SMS</button><button onClick={enrichC} className="text-xs px-2.5 py-1.5 border rounded-lg">✦ Enrich</button></div></div>}</div>
+    <div className="bg-white rounded-xl border p-5 mb-4"><div className="flex gap-4"><Av n={`${c.first_name} ${c.last_name}`} sz="w-14 h-14 text-xl" /><div className="flex-1"><div className="flex items-center gap-3 mb-1 flex-wrap"><h1 className="text-lg font-semibold">{c.first_name} {c.last_name}</h1><B s={c.status} />{c.ai_recommendation && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${c.ai_recommendation === "ADVANCE" ? "bg-green-100 text-green-700" : c.ai_recommendation === "REJECT" ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-700"}`}>{c.ai_recommendation}{c.overall_score ? ` ${c.overall_score}` : ""}</span>}</div><div className="text-sm text-gray-500">{c.current_title}{c.current_company ? ` at ${c.current_company}` : ""}</div><div className="flex gap-4 mt-2 text-xs text-gray-400 flex-wrap">{c.email && <span>{c.email}</span>}{c.phone && <span>{c.phone}</span>}{(c.city || c.state) && <span>{[c.city, c.state].filter(Boolean).join(", ")}</span>}{c.experience_years ? <span>{c.experience_years}yr exp</span> : null}</div></div>{editable && <div className="flex flex-col gap-2 self-start items-end"><select value={c.status} onChange={e => setStatus(e.target.value)} className="h-9 px-2 border rounded-lg text-xs">{CAND_STATUSES.map(s => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}</select><select value={c.owner_id || ""} onChange={e => setOwner(e.target.value)} className="h-9 px-2 border rounded-lg text-xs"><option value="">Unassigned</option>{recruiters.map(r => <option key={r.id} value={r.id}>{r.first_name || r.email}</option>)}</select><div className="flex gap-1.5 flex-wrap justify-end"><button onClick={() => setAddPipe(true)} className="text-xs px-2.5 py-1.5 border rounded-lg">+ Pipeline</button><button onClick={() => setEmailOpen(true)} className="text-xs px-2.5 py-1.5 border rounded-lg">✉ Email</button><button onClick={() => { if (!c.phone) { alert("No phone number on file."); return; } const n = c.phone.replace(/[^0-9+]/g, ""); if ((window as any).__zpCall) (window as any).__zpCall(n); else window.location.href = "zoomphonecall://" + n; }} title="Call via Zoom Phone (docked softphone, falls back to Zoom app)" className="text-xs px-2.5 py-1.5 border rounded-lg">📞 Zoom call</button><button onClick={() => { if (!c.phone) { alert("No phone number on file."); return; } const n = c.phone.replace(/[^0-9+]/g, ""); if ((window as any).__zpSms) (window as any).__zpSms(n); else window.location.href = "zoomphonesms://" + n; }} title="Text via Zoom Phone" className="text-xs px-2.5 py-1.5 border rounded-lg">💬 Zoom SMS</button><button onClick={callC} title="Call via Twilio (logs to timeline)" className="text-xs px-2.5 py-1.5 border rounded-lg">☎ Call</button><button onClick={smsC} className="text-xs px-2.5 py-1.5 border rounded-lg">💬 SMS</button><button onClick={enrichC} className="text-xs px-2.5 py-1.5 border rounded-lg">✦ Enrich</button></div></div>}</div>
       <div className="flex items-center gap-1.5 flex-wrap mt-3 pt-3 border-t">{(c.tags || []).map((t: string) => <span key={t} className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-full text-[11px] flex items-center gap-1">{t}{editable && <button onClick={() => removeTag(t)} className="text-slate-400 hover:text-slate-700">×</button>}</span>)}{editable && <input value={tag} onChange={e => setTag(e.target.value)} onKeyDown={e => e.key === "Enter" && addTag()} placeholder="+ tag" className="text-[11px] px-2 py-0.5 border rounded-full w-20 focus:w-32 transition-all" />}</div></div>
     <div className="flex border-b mb-4">{tabs.map(t =><button key={t} onClick={() => setTab(t)} className={`px-4 py-2 text-sm border-b-2 capitalize ${tab === t ? "border-slate-800 text-slate-800" : "border-transparent text-gray-400"}`}>{t === "ai" ? "AI analysis" : t}</button>)}</div>
     {tab === "overview" && <div className="grid md:grid-cols-2 gap-4">
@@ -590,6 +590,37 @@ function ClientPortal() {
   </div>;
 }
 
+/* ---------------- Zoom Phone Smart Embed (docked softphone) ---------------- */
+const ZOOM_EMBED_URL = "https://applications.zoom.us/integration/phone/embeddablePhone/home";
+const ZOOM_EMBED_ORIGIN = "https://applications.zoom.us";
+function Softphone() {
+  const [open, setOpen] = useState(false); const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  async function logZoom(p: any) {
+    try {
+      const d = p?.data || p || {}; const number = d.number || d.phoneNumber || d.calleeNumber || d.peerNumber || d.callerNumber;
+      const kind = String(p.type || "").includes("sms") ? "text" : "call";
+      let candidate_id: string | null = null;
+      if (number) { const digits = String(number).replace(/[^0-9]/g, "").slice(-9); if (digits) { const { data } = await supabase.from("candidates").select("id").ilike("phone", `%${digits}%`).limit(1); candidate_id = data?.[0]?.id || null; } }
+      await supabase.from("activities").insert({ type: kind, description: `Zoom Phone ${kind}${number ? " · " + number : ""}${d.duration ? " · " + d.duration + "s" : ""}`, candidate_id, metadata: { zoom: true, event: p.type, raw: d } });
+    } catch { /* ignore */ }
+  }
+  useEffect(() => {
+    function onMsg(e: MessageEvent) { if (e.origin !== ZOOM_EMBED_ORIGIN) return; const p: any = e.data; if (!p?.type) return; if (["zp-call-log-completed-event", "zp-save-log-event", "zp-sms-log-event", "zp-call-voicemail-received-event"].includes(p.type)) logZoom(p); }
+    window.addEventListener("message", onMsg);
+    const post = (msg: any) => iframeRef.current?.contentWindow?.postMessage(msg, ZOOM_EMBED_ORIGIN);
+    (window as any).__zpCall = (number: string) => { setOpen(true); setTimeout(() => post({ type: "zp-make-call", data: { number, autoDial: true } }), 900); };
+    (window as any).__zpSms = (number: string) => { setOpen(true); setTimeout(() => post({ type: "zp-input-sms", data: { number } }), 900); };
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+  return <>
+    <button onClick={() => setOpen(o => !o)} title="Zoom Phone" className="fixed bottom-20 right-5 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg z-50 flex items-center justify-center hover:bg-blue-700">📞</button>
+    <div className={`fixed bottom-36 right-5 w-80 h-[34rem] bg-white rounded-2xl shadow-2xl border z-50 overflow-hidden flex flex-col ${open ? "" : "hidden"}`}>
+      <div className="flex justify-between items-center px-3 py-2 bg-blue-600 text-white"><span className="text-sm font-medium">📞 Zoom Phone</span><button onClick={() => setOpen(false)} className="text-blue-100 hover:text-white text-lg leading-none">×</button></div>
+      <iframe ref={iframeRef} src={ZOOM_EMBED_URL} allow="microphone; autoplay; clipboard-write" className="flex-1 w-full border-0" />
+    </div>
+  </>;
+}
+
 /* ---------------- Assistant chat widget ---------------- */
 function ChatWidget() {
   const [open, setOpen] = useState(false); const [msgs, setMsgs] = useState<{ role: string; content: string }[]>([]); const [input, setInput] = useState(""); const [busy, setBusy] = useState(false);
@@ -667,6 +698,7 @@ export default function Home() {
       </div>
     </header>
     <main><div className="p-6 max-w-6xl mx-auto">{R()}</div></main>
+    <Softphone />
     <ChatWidget />
   </div>;
 }
