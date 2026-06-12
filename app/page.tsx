@@ -699,7 +699,6 @@ export default function Home() {
       </div>
     </header>
     <main><div className="p-6 max-w-6xl mx-auto">{R()}</div></main>
-    <Softphone />
     <ChatWidget />
   </div>;
 }
