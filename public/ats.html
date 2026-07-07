@@ -98,6 +98,11 @@ var API=location.host.indexOf('supabase.co')>-1?location.origin+location.pathnam
 var D={candidates:[],jobs:[],clients:[],contacts:[],applications:[],stages:[],pipelines:[],templates:[],pools:[],poolCands:[],tasks:[],interviews:[],placements:[],automations:[],sequences:[],seqSteps:[],activities:[],recs:[],runs:[],profiles:[]};
 var S={page:'dashboard',params:{},cq:'',cs:'all',csrc:'all',cscore:'all',cview:'table',cp:0,sel:{},jq:'',js:'all',iview:'cal',calY:(new Date()).getFullYear(),calM:(new Date()).getMonth(),tq:'',detail:null,detailId:null,loading:false};
 var CHARTS=[];
+var USERS={'Adam':'52b3491f-1a13-4217-823d-2fa2f101260d','Roe':'24fa2020-632f-4464-ab17-04f0095f435f','Carla':'9c29b41f-4c02-4159-a93c-fc56ce75af4e'};
+S.user=localStorage.getItem('ats_user')||'Adam';
+function uname(uid){for(var k in USERS)if(USERS[k]==uid)return k;return null}
+function isNew(c,days){return c&&c.created_at&&(Date.now()-new Date(c.created_at).getTime())<(days||7)*86400000}
+function newBadge(c){if(!isNew(c,7))return null;var hot=isNew(c,2);return h('span',{cls:'badge',style:hot?'background:#dc2626;color:#fff':'background:#fee2e2;color:#b91c1c'},hot?'🆕 NEW':'new this week')}
 function api(p,opt){return fetch(API+p,opt).then(function(r){return r.json()})}
 function post(p,body){return api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})}
 function ins(table,data){return post('/api/insert',{table:table,data:data})}
@@ -106,7 +111,7 @@ function del(table,id){return post('/api/delete',{table:table,id:id})}
 function bulk(table,ids,data){return post('/api/bulk',{table:table,ids:ids,data:data})}
 function aiCall(prompt,system,max){return post('/api/ai',{prompt:prompt,system:system,max_tokens:max||1500}).then(function(d){return d.text||d.error||'No response'})}
 function parseAI(r){try{return JSON.parse(r.replace(/```json/gi,'').replace(/```/g,'').trim())}catch(e){var m=r.match(/[\[{][\s\S]*[\]}]/);if(m){try{return JSON.parse(m[0])}catch(e2){}}return null}}
-function logActivity(o){var d={type:o.type||'note',description:o.description||'',candidate_id:o.candidate_id||null,job_id:o.job_id||null,client_id:o.client_id||null,application_id:o.application_id||null,metadata:o.metadata||null};ins('activities',d).then(function(r){if(r.result)D.activities.unshift(r.result)})}
+function logActivity(o){var d={type:o.type||'note',description:o.description||'',candidate_id:o.candidate_id||null,job_id:o.job_id||null,client_id:o.client_id||null,application_id:o.application_id||null,metadata:o.metadata||null,user_id:o.user_id||USERS[S.user]||null};ins('activities',d).then(function(r){if(r.result)D.activities.unshift(r.result)})}
 function load(){return api('/api/data').then(function(d){D.candidates=d.candidates||[];D.jobs=d.jobs||[];D.clients=d.clients||[];D.contacts=d.contacts||[];D.applications=d.applications||[];D.stages=d.stages||[];D.pipelines=d.pipelines||[];D.templates=d.templates||[];D.pools=d.pools||[];D.poolCands=d.pool_candidates||[];D.tasks=d.tasks||[];D.interviews=d.interviews||[];D.placements=d.placements||[];D.automations=d.automations||[];D.sequences=d.sequences||[];D.seqSteps=d.sequence_steps||[];D.activities=d.activities||[];D.recs=d.recommendations||[];D.runs=d.runs||[];D.profiles=d.profiles||[];render()}).catch(function(e){document.getElementById('app').innerHTML='<div class="empty"><div class="big">⚠️</div>Could not load data: '+e.message+'<br><br><button class="btn btn-p" onclick="location.reload()">Retry</button></div>'})}
 function h(t,a){var e=document.createElement(t);if(a)for(var k in a){if(k.slice(0,2)=='on')e[k]=a[k];else if(k=='style')e.style.cssText=a[k];else if(k=='cls')e.className=a[k];else if(k=='html')e.innerHTML=a[k];else if(k=='checked'||k=='disabled'||k=='draggable'||k=='selected')e[k]=a[k];else if(k=='value')e.value=a[k];else e.setAttribute(k,a[k])}for(var i=2;i<arguments.length;i++){var c=arguments[i];if(c==null)continue;if(Array.isArray(c)){c.forEach(function(x){if(x!=null)e.appendChild(typeof x=='object'?x:document.createTextNode(String(x)))})}else e.appendChild(typeof c=='object'?c:document.createTextNode(String(c)))}return e}
 function nav(p,params){S.page=p;S.params=params||{};if(p=='candidate-detail')loadDetail(params.id);render();scrollTo(0,0)}
@@ -159,7 +164,9 @@ function topnav(){
   var gi=h('input',{id:'gsearch-inp',placeholder:'Search everything…',oninput:function(e){gsRender(e.target.value)},onkeydown:function(e){if(e.key=='Escape'){e.target.value='';gsRender('')}}});
   var gr=h('div',{cls:'gs-results',id:'gs-results',style:'display:none'});
   gs.appendChild(gi);gs.appendChild(gr);el.appendChild(gs);
-  el.appendChild(h('div',{style:'margin-left:12px'},av('Adam',30)));
+  var us=sel([['Adam','Adam'],['Roe','Roe'],['Carla','Carla']],S.user,function(e){S.user=e.target.value;localStorage.setItem('ats_user',S.user);toast('Now working as '+S.user+' — all actions will be recorded under this name');render()},{style:'width:auto;background:#0f2422;color:#fff;border:1px solid #2c4a46;padding:5px 8px;font-size:12px;margin-left:10px;border-radius:8px'});
+  el.appendChild(us);
+  el.appendChild(h('div',{style:'margin-left:8px',title:'Actions are recorded as '+S.user},av(S.user,30)));
   return el;
 }
 function gsRender(q){var box=document.getElementById('gs-results');if(!q||q.length<2){box.style.display='none';return}box.style.display='block';box.innerHTML='';q=q.toLowerCase();var hits=0;
@@ -183,12 +190,12 @@ function pgDashboard(){
   var hired=D.candidates.filter(function(c){return c.status=='placed'}).length;
   var el=h('div',{});
   el.appendChild(h('div',{style:'display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:18px'},
-    h('div',{},h('h1',{cls:'pg'},'Dashboard'),h('div',{cls:'sub'},'Welcome back, Adam — here is your recruiting overview')),
+    h('div',{},h('h1',{cls:'pg'},'Dashboard'),h('div',{cls:'sub'},'Welcome back, '+S.user+' — here is your recruiting overview')),
     h('div',{style:'display:flex;gap:8px'},
       h('button',{cls:'btn btn-o',onclick:function(){openJobModal()}},'+ New Job'),
       h('button',{cls:'btn btn-p',onclick:function(){openCandidateModal()}},'+ Add Candidate'))));
   var g=h('div',{cls:'grid g4',style:'margin-bottom:16px'});
-  [['Candidates',D.candidates.length,'candidates'],['Open Jobs',openJobs.length,'jobs'],['Active Applications',activeApps.length,'pipeline'],['Interviews (7 days)',upcoming.length,'interviews'],['Placements',hired,'reports'],['Placed This Month',placedMonth,'reports'],['Open Tasks',dueTasks.length,'tasks'],['Active Clients',D.clients.filter(function(c){return c.status=='active'}).length,'clients']].forEach(function(x){
+  [['🆕 New This Week',D.candidates.filter(function(c){return isNew(c,7)}).length,'candidates'],['Candidates',D.candidates.length,'candidates'],['Open Jobs',openJobs.length,'jobs'],['Active Applications',activeApps.length,'pipeline'],['Interviews (7 days)',upcoming.length,'interviews'],['Placements',hired,'reports'],['Placed This Month',placedMonth,'reports'],['Open Tasks',dueTasks.length,'tasks'],['Active Clients',D.clients.filter(function(c){return c.status=='active'}).length,'clients']].forEach(function(x){
     g.appendChild(h('div',{cls:'stat',style:'cursor:pointer',onclick:function(){nav(x[2])}},h('div',{cls:'l'},x[0]),h('div',{cls:'v'},String(x[1])))) });
   el.appendChild(g);
   // charts row
@@ -215,13 +222,18 @@ function pgDashboard(){
   el.appendChild(fu);
   // 3-col: activity, interviews, tasks
   var bg=h('div',{cls:'grid',style:'grid-template-columns:repeat(auto-fit,minmax(290px,1fr))'});
+  var nc=h('div',{cls:'card'},h('div',{cls:'pad',style:'border-bottom:1px solid var(--line);font-weight:650'},'🆕 New Applicants (7 days)'));
+  var newest=D.candidates.filter(function(c){return isNew(c,7)}).slice(0,8);
+  if(!newest.length)nc.appendChild(h('div',{cls:'empty'},'No new applicants this week'));
+  newest.forEach(function(c){nc.appendChild(h('div',{style:'padding:10px 16px;border-bottom:1px solid #f1f3f5;display:flex;gap:9px;align-items:center;cursor:pointer',onclick:function(){nav('candidate-detail',{id:c.id})}},av(cname(c),26),h('div',{style:'flex:1;min-width:0'},h('div',{style:'font-weight:600;font-size:13px'},cname(c)),h('div',{cls:'hint'},'Applied '+fdate(c.created_at)+' '+ftime(c.created_at)+' · '+(c.source||'').replace(/^gsheet.*/,'sheet'))),newBadge(c)))});
+  bg.appendChild(nc);
   var act=h('div',{cls:'card'},h('div',{cls:'pad',style:'border-bottom:1px solid var(--line);font-weight:650'},'Recent Activity'));
   var actList=h('div',{style:'max-height:340px;overflow:auto'});
   if(!D.activities.length)actList.appendChild(h('div',{cls:'empty'},'No activity yet'));
   D.activities.slice(0,15).forEach(function(a){var c=candById(a.candidate_id);
     actList.appendChild(h('div',{style:'padding:10px 16px;border-bottom:1px solid #f1f3f5;cursor:'+(c?'pointer':'default'),onclick:c?function(){nav('candidate-detail',{id:c.id})}:null},
       h('div',{style:'font-size:13px'},h('b',{},c?cname(c):''),' ',a.description||a.type),
-      h('div',{cls:'hint'},ago(a.created_at))))});
+      h('div',{cls:'hint'},ago(a.created_at)+(uname(a.user_id)?' · by '+uname(a.user_id):' · auto'))))});
   act.appendChild(actList);bg.appendChild(act);
   var iv=h('div',{cls:'card'},h('div',{cls:'pad',style:'border-bottom:1px solid var(--line);font-weight:650'},'Upcoming Interviews'));
   if(!upcoming.length)iv.appendChild(h('div',{cls:'empty'},'None in the next 7 days',h('div',{style:'margin-top:10px'},h('button',{cls:'btn btn-o btn-s',onclick:function(){openInterviewModal()}},'+ Schedule'))));
@@ -292,7 +304,7 @@ function pgCandidates(){
     var gg=h('div',{cls:'grid',style:'grid-template-columns:repeat(auto-fill,minmax(250px,1fr))'});
     pgRows.forEach(function(c){gg.appendChild(h('div',{cls:'card pad',style:'cursor:pointer',onclick:function(){nav('candidate-detail',{id:c.id})}},
       h('div',{style:'display:flex;gap:10px;align-items:center;margin-bottom:8px'},av(cname(c),38),h('div',{style:'min-width:0'},h('div',{style:'font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'},cname(c)),h('div',{cls:'hint',style:'white-space:nowrap;overflow:hidden;text-overflow:ellipsis'},c.current_title||c.email||''))),
-      h('div',{style:'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px'},badge(c.status),c.overall_score!=null?h('span',{cls:'badge',style:'background:#dbeafe;color:#1d4ed8'},String(c.overall_score)):null,stars(c.rating)),
+      h('div',{style:'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px'},badge(c.status),newBadge(c),c.overall_score!=null?h('span',{cls:'badge',style:'background:#dbeafe;color:#1d4ed8'},String(c.overall_score)):null,stars(c.rating)),
       h('div',{cls:'hint'},[c.city,c.state].filter(Boolean).join(', ')||'—'),
       (c.skills&&c.skills.length)?h('div',{style:'margin-top:7px'},c.skills.slice(0,4).map(function(s){return h('span',{cls:'chip'},s)})):null))});
     el.appendChild(gg);
@@ -312,7 +324,7 @@ function pgCandidates(){
       var scTd=h('td',{});if(c.overall_score!=null)scTd.appendChild(h('span',{cls:'badge',style:c.overall_score>=70?'background:#d1fae5;color:#047857':'background:#fef3c7;color:#b45309'},String(c.overall_score)));else scTd.textContent='—';
       tr.appendChild(scTd);
       tr.appendChild(h('td',{},stars(c.rating)));
-      tr.appendChild(h('td',{cls:'hint'},fdate(c.created_at)));
+      var addTd=h('td',{},h('div',{cls:'hint'},fdate(c.created_at)));var nb2=newBadge(c);if(nb2)addTd.appendChild(nb2);tr.appendChild(addTd);
       tb.appendChild(tr)});
     el.appendChild(h('div',{cls:'card',style:'overflow:hidden'},h('div',{style:'overflow-x:auto'},h('table',{cls:'tbl'},h('thead',{},thr),tb))));
   }
@@ -371,6 +383,7 @@ function pgCandidateDetail(){
   nl.appendChild(stSel);
   if(c.ai_recommendation)nl.appendChild(h('span',{cls:'badge',style:c.ai_recommendation=='ADVANCE'?'background:#d1fae5;color:#047857':c.ai_recommendation=='REJECT'?'background:#fee2e2;color:#b91c1c':'background:#fef3c7;color:#b45309'},'AI: '+c.ai_recommendation));
   if(c.overall_score!=null)nl.appendChild(h('span',{cls:'badge',style:'background:#dbeafe;color:#1d4ed8'},'Score '+c.overall_score));
+  var nbH=newBadge(c);if(nbH)nl.appendChild(nbH);
   mid.appendChild(nl);
   mid.appendChild(h('div',{cls:'sub',style:'margin-top:2px'},(c.current_title||'')+(c.current_company?' at '+c.current_company:'')));
   var meta=h('div',{style:'display:flex;gap:14px;margin-top:6px;flex-wrap:wrap',cls:'hint'});
@@ -378,6 +391,7 @@ function pgCandidateDetail(){
   if(c.phone)meta.appendChild(h('span',{},'☎ '+c.phone));
   if(c.city||c.state||c.country)meta.appendChild(h('span',{},'📍 '+[c.city,c.state,c.country].filter(Boolean).join(', ')));
   if(c.experience_years)meta.appendChild(h('span',{},c.experience_years+' yrs exp'));
+  meta.appendChild(h('span',{style:isNew(c,7)?'color:#dc2626;font-weight:700':''},'📅 Applied '+fdate(c.created_at)+' ('+ago(c.created_at)+')'));
   mid.appendChild(meta);
   var rt=h('div',{style:'margin-top:6px;display:flex;gap:10px;align-items:center'});
   rt.appendChild(stars(c.rating,function(v){upd('candidates',c.id,{rating:v}).then(function(){c.rating=v;if(lite)lite.rating=v;render()})}));
@@ -433,14 +447,14 @@ function pgCandidateDetail(){
     var tl=h('div',{cls:'card pad'});
     var items=(dd.activities||[]);
     if(!items.length)tl.appendChild(h('div',{cls:'empty'},'No activity recorded yet'));
-    else{var t2=h('div',{cls:'timeline'});items.forEach(function(a){t2.appendChild(h('div',{cls:'tl-item'},h('div',{style:'font-size:13px'},h('b',{style:'text-transform:capitalize'},(a.type||'event').replace(/_/g,' ')),' — ',a.description||''),h('div',{cls:'hint'},fdate(a.created_at)+' '+ftime(a.created_at))))});tl.appendChild(t2)}
+    else{var t2=h('div',{cls:'timeline'});items.forEach(function(a){t2.appendChild(h('div',{cls:'tl-item'},h('div',{style:'font-size:13px'},h('b',{style:'text-transform:capitalize'},(a.type||'event').replace(/_/g,' ')),' — ',a.description||''),h('div',{cls:'hint'},fdate(a.created_at)+' '+ftime(a.created_at)+(uname(a.user_id)?' · by '+uname(a.user_id):' · auto'))))});tl.appendChild(t2)}
     body.appendChild(tl);
   }
   else if(tab=='notes'){
     var na=ta({rows:3,placeholder:'Write a note… ',id:'note-inp'});
-    var nc=h('div',{cls:'card pad',style:'margin-bottom:12px'},fld('Add note',na),h('button',{cls:'btn btn-p btn-s',onclick:function(){var v=na.value.trim();if(!v)return;ins('notes',{candidate_id:c.id,content:v}).then(function(r){if(r.result){dd.notes=dd.notes||[];dd.notes.unshift(r.result);logActivity({type:'note',description:'note added: '+v.slice(0,60),candidate_id:c.id});render()}})}},'Save Note'));
+    var nc=h('div',{cls:'card pad',style:'margin-bottom:12px'},fld('Add note',na),h('button',{cls:'btn btn-p btn-s',onclick:function(){var v=na.value.trim();if(!v)return;ins('notes',{candidate_id:c.id,content:v,user_id:USERS[S.user]||null}).then(function(r){if(r.result){dd.notes=dd.notes||[];dd.notes.unshift(r.result);logActivity({type:'note',description:'note added: '+v.slice(0,60),candidate_id:c.id});render()}})}},'Save Note'));
     body.appendChild(nc);
-    (dd.notes||[]).forEach(function(n){body.appendChild(h('div',{cls:'card pad',style:'margin-bottom:8px'},h('div',{style:'font-size:13px;white-space:pre-wrap'},n.content),h('div',{style:'display:flex;justify-content:space-between;margin-top:6px'},h('span',{cls:'hint'},ago(n.created_at)),h('button',{cls:'btn btn-o btn-s',style:'padding:1px 8px;font-size:11px',onclick:function(){del('notes',n.id).then(function(){dd.notes=dd.notes.filter(function(x){return x.id!=n.id});render()})}},'Delete'))))});
+    (dd.notes||[]).forEach(function(n){body.appendChild(h('div',{cls:'card pad',style:'margin-bottom:8px'},h('div',{style:'font-size:13px;white-space:pre-wrap'},n.content),h('div',{style:'display:flex;justify-content:space-between;margin-top:6px'},h('span',{cls:'hint'},(uname(n.user_id)?uname(n.user_id)+' · ':'')+ago(n.created_at)),h('button',{cls:'btn btn-o btn-s',style:'padding:1px 8px;font-size:11px',onclick:function(){del('notes',n.id).then(function(){dd.notes=dd.notes.filter(function(x){return x.id!=n.id});render()})}},'Delete'))))});
     if(!(dd.notes||[]).length)body.appendChild(h('div',{cls:'empty'},'No notes yet'));
   }
   else if(tab=='applications'){
@@ -709,6 +723,7 @@ function kanban(apps,job){
         h('div',{style:'min-width:0;flex:1'},h('div',{style:'font-size:12.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis'},cname(cd)),
           h('div',{cls:'hint',style:'white-space:nowrap;overflow:hidden;text-overflow:ellipsis'},(cd&&cd.current_title)||''))));
       var foot=h('div',{style:'display:flex;gap:5px;margin-top:7px;align-items:center;flex-wrap:wrap'});
+      var nbK=newBadge(cd);if(nbK)foot.appendChild(nbK);
       if(!job){var jj=jobById(a.job_id);if(jj)foot.appendChild(h('span',{cls:'badge',style:'background:#eef2f1;color:#4b5563;max-width:150px;overflow:hidden;text-overflow:ellipsis'},jj.title))}
       if(cd&&cd.overall_score!=null)foot.appendChild(h('span',{cls:'badge',style:cd.overall_score>=70?'background:#d1fae5;color:#047857':'background:#fef3c7;color:#b45309'},String(cd.overall_score)));
       if(a.match_score)foot.appendChild(h('span',{cls:'badge',style:'background:#dbeafe;color:#1d4ed8'},a.match_score+'%'));
@@ -835,21 +850,30 @@ function openInterviewModal(cand){
   var fLink=inp({placeholder:'Zoom / Meet link (optional)'});
   var fLoc=inp({placeholder:'Location (optional)'});
   var fAgenda=ta({rows:2,placeholder:'Agenda / notes for the interview'});
+  var fZoom=h('input',{type:'checkbox',cls:'check',checked:true});
   var body=h('div',{},cand?h('div',{cls:'fld'},h('label',{cls:'lbl'},'Candidate'),h('div',{style:'font-weight:650'},cname(cand))):fld('Candidate',candSel),
     h('div',{cls:'grid',style:'grid-template-columns:1fr 1fr;gap:0 12px'},fld('Type',fType),fld('Duration',fDur),fld('Date',fDate),fld('Time',fTime)),
-    fld('Meeting link',fLink),fld('Location',fLoc),fld('Agenda',fAgenda));
-  openModal('Schedule Interview',body,[h('button',{cls:'btn btn-o',onclick:closeModal},'Cancel'),
-    h('button',{cls:'btn btn-p',onclick:function(){
+    h('label',{style:'display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:12px'},fZoom,' 🎥 Auto-create Zoom meeting (hosted by Roe)'),
+    fld('Meeting link (leave blank to auto-create)',fLink),fld('Location',fLoc),fld('Agenda',fAgenda));
+  var schedBtn=h('button',{cls:'btn btn-p',onclick:function(){
       var cid=cand?cand.id:candSel.value;
       if(!fDate.value||!fTime.value)return toast('Pick date and time');
       var when=new Date(fDate.value+'T'+fTime.value);
       var app=D.applications.find(function(a){return a.candidate_id==cid&&a.status=='active'});
-      ins('interviews',{candidate_id:cid,application_id:app?app.id:null,type:fType.value,status:'scheduled',scheduled_at:when.toISOString(),duration:Number(fDur.value),google_meet_link:fLink.value.trim()||null,location:fLoc.value.trim()||null,agenda:fAgenda.value.trim()||null}).then(function(r){
-        if(r.error)return toast('Error: '+r.error.message);
-        D.interviews.push(r.result);
-        logActivity({type:'interview_scheduled',description:'interview scheduled for '+fdate(when)+' '+ftime(when),candidate_id:cid});
-        toast('Interview scheduled');closeModal();render()})
-    }},'Schedule')]);
+      var nameStr=cand?cname(cand):((candSel.options[candSel.selectedIndex]||{}).text||'Candidate');
+      var doIns=function(link){
+        ins('interviews',{candidate_id:cid,application_id:app?app.id:null,type:fType.value,status:'scheduled',scheduled_at:when.toISOString(),duration:Number(fDur.value),google_meet_link:link||null,location:fLoc.value.trim()||null,agenda:fAgenda.value.trim()||null}).then(function(r){
+          if(r.error){schedBtn.disabled=false;schedBtn.textContent='Schedule';return toast('Error: '+r.error.message)}
+          D.interviews.push(r.result);
+          logActivity({type:'interview_scheduled',description:'interview scheduled for '+fdate(when)+' '+ftime(when)+(link?' (Zoom link created)':''),candidate_id:cid});
+          toast(link?'Interview scheduled — Zoom link ready':'Interview scheduled');closeModal();render()})};
+      if(fZoom.checked&&!fLink.value.trim()){
+        schedBtn.disabled=true;schedBtn.textContent='Creating Zoom…';
+        post('/api/zoom',{topic:'Interview — '+nameStr+' × Streamlined Staffing',start_time:when.toISOString(),duration:Number(fDur.value)}).then(function(z){
+          if(z.error){toast('Zoom: '+z.error+' — scheduling without link');doIns(null)}else doIns(z.join_url)}).catch(function(){doIns(null)});
+      } else doIns(fLink.value.trim()||null);
+    }},'Schedule');
+  openModal('Schedule Interview',body,[h('button',{cls:'btn btn-o',onclick:closeModal},'Cancel'),schedBtn]);
 }
 window.openInterviewModal=openInterviewModal;
 function openScorecardModal(i){
