@@ -653,7 +653,7 @@ function Login() {
 
 /* ---------------- Shell ---------------- */
 const NV: { id: Section; l: string; i: string }[] = [
-  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "settings", l: "Settings", i: "⚙️" }];
+  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "outreach", l: "Outreach", i: "\u{1F4E8}" }, { id: "settings", l: "Settings", i: "⚙️" }];
 
 export default function Home() {
   const { profile, loading, signOut } = useAuth();
@@ -684,6 +684,7 @@ export default function Home() {
       case "tasks": return allowed("tasks") ? <Tasks /> : <Denied />;
       case "reports": return allowed("reports") ? <Reports /> : <Denied />;
       case "search": return allowed("search") ? <Search nav={nav} /> : <Denied />;
+      case "outreach": return allowed("outreach") ? <Outreach /> : <Denied />;
       case "settings": return canManageUsers(role) ? <Settings /> : <Denied />;
       default: return <Dash nav={nav} />;
     }
@@ -700,6 +701,11 @@ export default function Home() {
     </header>
     <main><div className="p-6 max-w-6xl mx-auto">{R()}</div></main>
     <ChatWidget />
+  </div>;
+}
+function Outreach() {
+  return <div className="bg-white rounded-xl border overflow-hidden" style={{ height: "calc(100vh - 7.5rem)" }}>
+    <iframe src="https://nwknnsbiroppdaraxmxp.supabase.co/functions/v1/outreach" title="Outreach" className="w-full h-full border-0" />
   </div>;
 }
 function Denied() { return <div className="py-20 text-center text-gray-400 text-sm">You don&rsquo;t have access to this section.</div>; }
