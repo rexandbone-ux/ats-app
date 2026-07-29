@@ -8,6 +8,9 @@ const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsIn
 // This no-op lock runs the callback immediately, eliminating the deadlock.
 const noLock = async <R>(_name: string, _acquireTimeout: number, fn: () => Promise<R>): Promise<R> => fn()
 
+export const SUPABASE_URL = url
+export const SUPABASE_ANON_KEY = key
+
 export const supabase = createClient(url, key, {
   auth: {
     persistSession: true,
