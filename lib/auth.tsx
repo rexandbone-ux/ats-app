@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
+import { logError, must } from "@/lib/errors";
 
 export type Role = "super_admin" | "admin" | "recruiter" | "hiring_manager" | "client_user" | "candidate_user";
 
@@ -48,30 +49,50 @@ export const ROLE_LABELS: Record<Role, string> = {
 type AuthCtx = {
   profile: Profile | null;
   loading: boolean;
+  /** Session or profile load failure — the app cannot assume a role when this is set. */
+  error: string | null;
+  reload: () => void;
   signIn: (email: string, password: string) => Promise<string | null>;
-  signOut: () => Promise<void>;
+  signOut: () => Promise<string | null>;
 };
-const Ctx = createContext<AuthCtx>({ profile: null, loading: true, signIn: async () => null, signOut: async () => {} });
+const Ctx = createContext<AuthCtx>({ profile: null, loading: true, error: null, reload: () => {}, signIn: async () => null, signOut: async () => null });
 export const useAuth = () => useContext(Ctx);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const reload = useCallback(() => setAttempt(a => a + 1), []);
 
-  const loadProfile = useCallback(async (userId: string, email: string) => {
-    const { data } = await supabase.from("profiles").select("id,email,first_name,last_name,role,is_active").eq("id", userId).single();
-    if (data) setProfile(data as Profile);
-    else setProfile({ id: userId, email, role: "recruiter" });
+  // Returns an error message instead of falling back to a default role: a failed
+  // profile read must not be mistaken for "this user is a recruiter".
+  const loadProfile = useCallback(async (userId: string, email: string): Promise<string | null> => {
+    try {
+      const data = await must("load profile", supabase.from("profiles").select("id,email,first_name,last_name,role,is_active").eq("id", userId).maybeSingle());
+      // No row yet (new signup) is a legitimate state, unlike a query failure.
+      setProfile(data ? (data as Profile) : { id: userId, email, role: "recruiter" });
+      return null;
+    } catch (e) {
+      setProfile(null);
+      return logError("load profile", e);
+    }
   }, []);
 
   useEffect(() => {
     let mounted = true;
+    setLoading(true);
+    setError(null);
     // Initial session check (safe to await here — not inside the auth lock callback).
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error: sessionError }) => {
       if (!mounted) return;
-      if (session?.user) await loadProfile(session.user.id, session.user.email || "");
+      if (sessionError) { setError(logError("get session", sessionError)); setLoading(false); return; }
+      if (session?.user) {
+        const message = await loadProfile(session.user.id, session.user.email || "");
+        if (mounted && message) setError(message);
+      }
       if (mounted) setLoading(false);
-    }).catch(() => { if (mounted) setLoading(false); });
+    }).catch(e => { if (mounted) { setError(logError("get session", e)); setLoading(false); } });
     // IMPORTANT: do NOT await Supabase DB calls directly inside onAuthStateChange —
     // the auth lock is held during the callback and a DB call would deadlock.
     // Defer with setTimeout so the lock is released first.
@@ -79,20 +100,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!mounted) return;
       if (session?.user) {
         const uid = session.user.id, em = session.user.email || "";
-        setTimeout(() => { if (mounted) loadProfile(uid, em); }, 0);
+        setTimeout(async () => {
+          const message = await loadProfile(uid, em);
+          if (mounted) setError(message);
+        }, 0);
       } else {
         setProfile(null);
+        setError(null);
       }
       setLoading(false);
     });
     return () => { mounted = false; sub.subscription.unsubscribe(); };
-  }, [loadProfile]);
+  }, [loadProfile, attempt]);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return error ? error.message : null;
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      return signInError ? logError("sign in", signInError) : null;
+    } catch (e) {
+      // Network/CORS failures reject rather than returning an error field.
+      return logError("sign in", e);
+    }
   }, []);
-  const signOut = useCallback(async () => { await supabase.auth.signOut(); setProfile(null); }, []);
+  const signOut = useCallback(async () => {
+    let message: string | null = null;
+    try {
+      const { error: signOutError } = await supabase.auth.signOut();
+      if (signOutError) message = logError("sign out", signOutError);
+    } catch (e) {
+      message = logError("sign out", e);
+    }
+    // Local state is cleared either way so the user is not stuck in a signed-in UI.
+    setProfile(null);
+    setError(null);
+    return message;
+  }, []);
 
-  return <Ctx.Provider value={{ profile, loading, signIn, signOut }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ profile, loading, error, reload, signIn, signOut }}>{children}</Ctx.Provider>;
 }
