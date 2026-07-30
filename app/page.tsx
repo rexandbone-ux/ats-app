@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, escapeFilterValue, FUNCTIONS_URL } from "@/lib/supabase";
 import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Role, Section } from "@/lib/auth";
 
 type C = { id: string; first_name: string; last_name: string; email?: string; phone?: string; current_title?: string; current_company?: string; status: string; source?: string; city?: string; state?: string; skills?: string[]; experience_years?: number; rating?: number; overall_score?: number; resume_text?: string; screening_responses?: any; application_answers?: any; notes?: string; ai_recommendation?: string; ai_analysis?: any; created_at: string };
@@ -18,8 +18,14 @@ async function logActivity(type: string, description: string, refs: { candidate_
   try { await supabase.from("activities").insert({ type, description, ...refs, user_id: userId || null }); } catch { /* non-blocking */ }
 }
 function rawDbx(u: string) { return u.replace("www.dropbox.com", "dl.dropboxusercontent.com").replace(/([?&])dl=0/, "$1raw=1"); }
+/** Only http(s) links are safe to render — blocks javascript:/data: URLs stored on records. */
+function safeUrl(url?: string | null): string | null {
+  if (!url) return null;
+  try { const u = new URL(url.trim()); return u.protocol === "http:" || u.protocol === "https:" ? u.href : null; } catch { return null; }
+}
 function embedOf(url: string): { type: string; src: string } | null {
-  if (!url) return null; const u = url.trim();
+  const u = safeUrl(url);
+  if (!u) return null;
   let m = u.match(/voca(?:roo)?\.(?:com|ro)\/(?:embed\/)?([A-Za-z0-9]+)/i);
   if (m && /voca/i.test(u)) return { type: "audio", src: `https://vocaroo.com/embed/${m[1]}?autoplay=0` };
   m = u.match(/loom\.com\/(?:share|embed)\/([A-Za-z0-9]+)/i);
@@ -33,8 +39,9 @@ function embedOf(url: string): { type: string; src: string } | null {
   if (/\.pdf(\?|$)/i.test(u)) return { type: "pdf", src: rawDbx(u) };
   return null;
 }
-function MediaLink({ label, url }: { label: string; url?: string }) {
-  if (!url || !url.trim()) return null;
+function MediaLink({ label, url: raw }: { label: string; url?: string }) {
+  const url = safeUrl(raw);
+  if (!url) return null;
   const e = embedOf(url);
   return <div className="mb-4"><div className="flex items-center justify-between mb-1"><span className="text-xs font-medium text-gray-600">{label}</span><a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open ↗</a></div>
     {e?.type === "audio" && <iframe src={e.src} className="w-full" height="60" frameBorder="0" />}
@@ -119,7 +126,7 @@ function Cands({ nav, editable }: { nav: (p: string, d?: any) => void; editable:
   const { profile } = useAuth();
   const [cs, setCs] = useState<C[]>([]); const [q, setQ] = useState(""); const [f, setF] = useState("all"); const [own, setOwn] = useState("all"); const [pg, setPg] = useState(0); const [tot, setTot] = useState(0); const [add, setAdd] = useState(false); const [sel, setSel] = useState<Set<string>>(new Set()); const [bulkTag, setBulkTag] = useState(""); const [pools, setPools] = useState<any[]>([]); const [recs, setRecs] = useState<any[]>([]); const [imp, setImp] = useState(false);
   const recMap: Record<string, string> = {}; recs.forEach(r => { recMap[r.id] = r.first_name || r.email || "?"; });
-  const load = useCallback(async () => { let qr = supabase.from("candidates").select("*", { count: "exact" }); if (q) qr = qr.or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%,email.ilike.%${q}%,current_title.ilike.%${q}%`); if (f !== "all") qr = qr.eq("status", f); if (own === "me" && profile) qr = qr.eq("owner_id", profile.id); else if (own === "unassigned") qr = qr.is("owner_id", null); else if (own !== "all") qr = qr.eq("owner_id", own); const { data, count } = await qr.order("created_at", { ascending: false }).range(pg * 25, (pg + 1) * 25 - 1); setCs(data || []); setTot(count || 0); }, [q, f, own, pg, profile]);
+  const load = useCallback(async () => { let qr = supabase.from("candidates").select("*", { count: "exact" }); const term = escapeFilterValue(q); if (term) qr = qr.or(`first_name.ilike.%${term}%,last_name.ilike.%${term}%,email.ilike.%${term}%,current_title.ilike.%${term}%`); if (f !== "all") qr = qr.eq("status", f); if (own === "me" && profile) qr = qr.eq("owner_id", profile.id); else if (own === "unassigned") qr = qr.is("owner_id", null); else if (own !== "all") qr = qr.eq("owner_id", own); const { data, count } = await qr.order("created_at", { ascending: false }).range(pg * 25, (pg + 1) * 25 - 1); setCs(data || []); setTot(count || 0); }, [q, f, own, pg, profile]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { supabase.from("profiles").select("id,first_name,last_name,email").in("role", ["super_admin", "admin", "recruiter", "hiring_manager"]).then(({ data }) => setRecs(data || [])); }, []);
   const ids = () => Array.from(sel);
@@ -359,7 +366,8 @@ function Search({ nav }: { nav: (p: string, d?: any) => void }) {
     try { const { data } = await supabase.functions.invoke("ai-assist", { body: { action: "search_parse", query: q } }); const f = (data as any)?.filters; if (f) t = [...(f.titles || []), ...(f.skills || []), ...(f.keywords || [])]; } catch { /* fall back */ }
     if (!t.length) t = q.toLowerCase().split(/\s+/).filter(w => w.length > 2);
     t = Array.from(new Set(t)).slice(0, 8); setTerms(t);
-    const or = t.length ? t.map(w => `current_title.ilike.%${w}%,first_name.ilike.%${w}%,last_name.ilike.%${w}%`).join(",") : `first_name.ilike.%${q}%`;
+    const safe = t.map(escapeFilterValue).filter(Boolean);
+    const or = safe.length ? safe.map(w => `current_title.ilike.%${w}%,first_name.ilike.%${w}%,last_name.ilike.%${w}%`).join(",") : `first_name.ilike.%${escapeFilterValue(q)}%`;
     const { data } = await supabase.from("candidates").select("*").or(or).limit(40); setRs(data || []); setBusy(false); setDone(true);
   }
   return <div><h1 className="text-xl font-semibold mb-1">AI Search</h1><p className="text-xs text-gray-400 mb-4">Search by title, name, or skill &mdash; e.g. &ldquo;medical intake coordinator&rdquo;.</p><div className="flex gap-2 mb-4"><input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === "Enter" && go()} placeholder="Search candidates..." className="flex-1 px-3 py-2 border rounded-lg text-sm" /><button onClick={go} disabled={busy} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">{busy ? "..." : "Search"}</button></div>{terms.length > 0 && <div className="text-[11px] text-gray-400 mb-3">AI interpreted as: {terms.map(t => <span key={t} className="inline-block px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full mr-1">{t}</span>)}</div>}
@@ -390,7 +398,7 @@ function Interviews({ nav, editable }: { nav: (p: string, d?: any) => void; edit
 }
 function ScheduleInterview({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [q, setQ] = useState(""); const [opts, setOpts] = useState<any[]>([]); const [f, setF] = useState<any>({ candidate_id: "", candidate_name: "", type: "phone_screen", scheduled_at: "", duration: 30, location: "" }); const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [zoom, setZoom] = useState(false);
-  useEffect(() => { if (q.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
+  useEffect(() => { const term = escapeFilterValue(q); if (term.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${term}%,last_name.ilike.%${term}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
   async function save() {
     if (!f.candidate_id || !f.scheduled_at) { setErr("Pick a candidate and a date/time"); return; }
     setBusy(true); let location = f.location; let meet: string | null = null;
@@ -492,7 +500,7 @@ function RecordPlacement({ onClose, onSaved }: { onClose: () => void; onSaved: (
   const [q, setQ] = useState(""); const [opts, setOpts] = useState<any[]>([]); const [clients, setClients] = useState<any[]>([]); const [jobs, setJobs] = useState<any[]>([]);
   const [f, setF] = useState<any>({ candidate_id: "", candidate_name: "", client_id: "", job_id: "", candidate_pay_rate: "", client_bill_rate: "", pay_period: "hour", start_date: "" }); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   useEffect(() => { supabase.from("clients").select("id,company_name").order("company_name").then(({ data }) => setClients(data || [])); supabase.from("jobs").select("id,title").order("created_at", { ascending: false }).then(({ data }) => setJobs(data || [])); }, []);
-  useEffect(() => { if (q.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
+  useEffect(() => { const term = escapeFilterValue(q); if (term.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${term}%,last_name.ilike.%${term}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
   async function save() {
     if (!f.candidate_id || !f.client_id) { setErr("Pick a candidate and a client"); return; }
     setBusy(true);
@@ -581,7 +589,7 @@ function ClientPortal() {
         <p className="text-xs text-gray-400 mb-6">Review candidates submitted for your roles and let us know your decision.</p>
         {(d.jobs || []).length === 0 ? <p className="text-sm text-gray-400">No positions yet.</p> : (d.jobs || []).map((j: any) => <div key={j.id} className="bg-white rounded-xl border mb-4">
           <div className="flex justify-between items-center px-5 py-3 border-b"><div><div className="font-medium">{j.title}</div><div className="text-xs text-gray-400">{j.location || "Remote"}</div></div><B s={j.status} /></div>
-          <div className="divide-y">{appsFor(j.id).length === 0 ? <div className="px-5 py-4 text-xs text-gray-400">No candidates submitted yet.</div> : appsFor(j.id).map((a: any) => <div key={a.id} className="px-5 py-3"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-3"><Av n={`${a.candidates?.first_name || ""} ${a.candidates?.last_name || ""}`} /><div><div className="text-sm font-medium">{a.candidates?.first_name} {a.candidates?.last_name}</div><div className="text-[11px] text-gray-400">{a.candidates?.current_title || ""}</div></div></div><div className="flex items-center gap-2">{a.candidates?.resume_url && <a href={a.candidates.resume_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600">Résumé</a>}{a.candidates?.voice_recording_url && <a href={a.candidates.voice_recording_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600">Recording</a>}</div></div>
+          <div className="divide-y">{appsFor(j.id).length === 0 ? <div className="px-5 py-4 text-xs text-gray-400">No candidates submitted yet.</div> : appsFor(j.id).map((a: any) => <div key={a.id} className="px-5 py-3"><div className="flex items-center justify-between gap-3"><div className="flex items-center gap-3"><Av n={`${a.candidates?.first_name || ""} ${a.candidates?.last_name || ""}`} /><div><div className="text-sm font-medium">{a.candidates?.first_name} {a.candidates?.last_name}</div><div className="text-[11px] text-gray-400">{a.candidates?.current_title || ""}</div></div></div><div className="flex items-center gap-2">{safeUrl(a.candidates?.resume_url) && <a href={safeUrl(a.candidates.resume_url)!} target="_blank" rel="noreferrer" className="text-xs text-blue-600">Résumé</a>}{safeUrl(a.candidates?.voice_recording_url) && <a href={safeUrl(a.candidates.voice_recording_url)!} target="_blank" rel="noreferrer" className="text-xs text-blue-600">Recording</a>}</div></div>
             <div className="flex items-center gap-2 mt-2">{a.client_decision ? <span className={`text-[11px] px-2 py-0.5 rounded-full ${a.client_decision === "interview" || a.client_decision === "accept" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>You: {a.client_decision}</span> : <><button onClick={() => decide(a.id, "interview")} className="text-xs px-3 py-1 bg-slate-800 text-white rounded-lg">Request interview</button><button onClick={() => decide(a.id, "pass")} className="text-xs px-3 py-1 border rounded-lg">Pass</button></>}{a.client_feedback && <span className="text-[11px] text-gray-400 italic">“{a.client_feedback}”</span>}</div>
           </div>)}</div>
         </div>)}
@@ -656,13 +664,13 @@ const NV: { id: Section; l: string; i: string }[] = [
   { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "sourcing", l: "Sourcing", i: "\u{1F3AF}" }, { id: "outreach", l: "Outreach", i: "\u{1F4E8}" }, { id: "settings", l: "Settings", i: "⚙️" }];
 
 export default function Home() {
-  const { profile, loading, signOut } = useAuth();
+  const { profile, denied, loading, signOut } = useAuth();
   const [pg, setPg] = useState<string>("dash"); const [pr, setPr] = useState<any>({});
   const [gq, setGq] = useState(""); const [gres, setGres] = useState<any[]>([]);
   const nav = useCallback((p: string, d: any = {}) => { setPg(p); setPr(d); setGq(""); setGres([]); }, []);
-  useEffect(() => { if (gq.trim().length < 2) { setGres([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name,current_title").or(`first_name.ilike.%${gq}%,last_name.ilike.%${gq}%,email.ilike.%${gq}%,current_title.ilike.%${gq}%`).limit(7); setGres(data || []); }, 200); return () => clearTimeout(t); }, [gq]);
+  useEffect(() => { const term = escapeFilterValue(gq); if (term.length < 2) { setGres([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name,current_title").or(`first_name.ilike.%${term}%,last_name.ilike.%${term}%,email.ilike.%${term}%,current_title.ilike.%${term}%`).limit(7); setGres(data || []); }, 200); return () => clearTimeout(t); }, [gq]);
   if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>;
-  if (!profile) return <Login />;
+  if (!profile) return denied ? <NoAccess onSignOut={signOut} /> : <Login />;
   if (profile.role === "client_user") return <ClientPortal />;
   const role = profile.role; const editable = canEdit(role);
   const items = NV.filter(it => can(role, it.id));
@@ -706,13 +714,16 @@ export default function Home() {
 }
 function Sourcing() {
   return <div className="bg-white rounded-xl border overflow-hidden" style={{ height: "calc(100vh - 7.5rem)" }}>
-    <iframe src="https://nwknnsbiroppdaraxmxp.supabase.co/functions/v1/sourcing-app" title="Sourcing" className="w-full h-full border-0" />
+    <iframe src={`${FUNCTIONS_URL}/sourcing-app`} title="Sourcing" className="w-full h-full border-0" />
   </div>;
 }
 function Outreach() {
   return <div className="bg-white rounded-xl border overflow-hidden" style={{ height: "calc(100vh - 7.5rem)" }}>
-    <iframe src="https://nwknnsbiroppdaraxmxp.supabase.co/functions/v1/outreach" title="Outreach" className="w-full h-full border-0" />
+    <iframe src={`${FUNCTIONS_URL}/outreach`} title="Outreach" className="w-full h-full border-0" />
   </div>;
+}
+function NoAccess({ onSignOut }: { onSignOut: () => void }) {
+  return <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4"><div className="bg-white rounded-2xl p-8 w-full max-w-sm text-center"><h1 className="text-base font-semibold mb-2">No access</h1><p className="text-sm text-gray-500 mb-5">This account isn&rsquo;t active in the ATS. Ask an administrator to enable it.</p><button onClick={onSignOut} className="w-full bg-slate-800 text-white py-2.5 rounded-lg text-sm font-medium">Sign out</button></div></div>;
 }
 function Denied() { return <div className="py-20 text-center text-gray-400 text-sm">You don&rsquo;t have access to this section.</div>; }
 function ComingSoon({ title, note }: { title: string; note: string }) { return <div><h1 className="text-xl font-semibold mb-4">{title}</h1><div className="bg-white rounded-xl border p-10 text-center"><p className="text-sm text-gray-500">{note}</p></div></div>; }
