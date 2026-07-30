@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Role, Section } from "@/lib/auth";
+import { embedOf } from "@/lib/media";
 
 type C = { id: string; first_name: string; last_name: string; email?: string; phone?: string; current_title?: string; current_company?: string; status: string; source?: string; city?: string; state?: string; skills?: string[]; experience_years?: number; rating?: number; overall_score?: number; resume_text?: string; screening_responses?: any; application_answers?: any; notes?: string; ai_recommendation?: string; ai_analysis?: any; created_at: string };
 
@@ -16,22 +17,6 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 function Field({ label, ...p }: any) { return <label className="block mb-3"><span className="text-xs text-gray-500">{label}</span><input {...p} className="w-full px-3 py-2 border rounded-lg text-sm mt-1" /></label>; }
 async function logActivity(type: string, description: string, refs: { candidate_id?: string; job_id?: string; client_id?: string; application_id?: string }, userId?: string) {
   try { await supabase.from("activities").insert({ type, description, ...refs, user_id: userId || null }); } catch { /* non-blocking */ }
-}
-function rawDbx(u: string) { return u.replace("www.dropbox.com", "dl.dropboxusercontent.com").replace(/([?&])dl=0/, "$1raw=1"); }
-function embedOf(url: string): { type: string; src: string } | null {
-  if (!url) return null; const u = url.trim();
-  let m = u.match(/voca(?:roo)?\.(?:com|ro)\/(?:embed\/)?([A-Za-z0-9]+)/i);
-  if (m && /voca/i.test(u)) return { type: "audio", src: `https://vocaroo.com/embed/${m[1]}?autoplay=0` };
-  m = u.match(/loom\.com\/(?:share|embed)\/([A-Za-z0-9]+)/i);
-  if (m) return { type: "iframe", src: `https://www.loom.com/embed/${m[1]}` };
-  m = u.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([A-Za-z0-9_-]+)/i);
-  if (m) return { type: "iframe", src: `https://www.youtube.com/embed/${m[1]}` };
-  m = u.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/i);
-  if (m) return { type: "iframe", src: `https://drive.google.com/file/d/${m[1]}/preview` };
-  if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(u)) return { type: "video", src: rawDbx(u) };
-  if (/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) return { type: "audiofile", src: rawDbx(u) };
-  if (/\.pdf(\?|$)/i.test(u)) return { type: "pdf", src: rawDbx(u) };
-  return null;
 }
 function MediaLink({ label, url }: { label: string; url?: string }) {
   if (!url || !url.trim()) return null;
