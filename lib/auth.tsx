@@ -47,21 +47,28 @@ export const ROLE_LABELS: Record<Role, string> = {
 
 type AuthCtx = {
   profile: Profile | null;
+  /** Signed in, but the account has no active profile row (no access granted). */
+  denied: boolean;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;
 };
-const Ctx = createContext<AuthCtx>({ profile: null, loading: true, signIn: async () => null, signOut: async () => {} });
+const Ctx = createContext<AuthCtx>({ profile: null, denied: false, loading: true, signIn: async () => null, signOut: async () => {} });
 export const useAuth = () => useContext(Ctx);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [denied, setDenied] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const loadProfile = useCallback(async (userId: string, email: string) => {
+  // Fail closed: an account with no profile row, or a deactivated one, gets no
+  // role at all instead of defaulting to recruiter access.
+  const loadProfile = useCallback(async (userId: string) => {
     const { data } = await supabase.from("profiles").select("id,email,first_name,last_name,role,is_active").eq("id", userId).single();
-    if (data) setProfile(data as Profile);
-    else setProfile({ id: userId, email, role: "recruiter" });
+    const p = data as Profile | null;
+    const ok = !!(p && p.role && p.is_active !== false);
+    setProfile(ok ? p : null);
+    setDenied(!ok);
   }, []);
 
   useEffect(() => {
@@ -69,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Initial session check (safe to await here — not inside the auth lock callback).
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!mounted) return;
-      if (session?.user) await loadProfile(session.user.id, session.user.email || "");
+      if (session?.user) await loadProfile(session.user.id);
       if (mounted) setLoading(false);
     }).catch(() => { if (mounted) setLoading(false); });
     // IMPORTANT: do NOT await Supabase DB calls directly inside onAuthStateChange —
@@ -78,10 +85,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       if (!mounted) return;
       if (session?.user) {
-        const uid = session.user.id, em = session.user.email || "";
-        setTimeout(() => { if (mounted) loadProfile(uid, em); }, 0);
+        const uid = session.user.id;
+        setTimeout(() => { if (mounted) loadProfile(uid); }, 0);
       } else {
         setProfile(null);
+        setDenied(false);
       }
       setLoading(false);
     });
@@ -92,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     return error ? error.message : null;
   }, []);
-  const signOut = useCallback(async () => { await supabase.auth.signOut(); setProfile(null); }, []);
+  const signOut = useCallback(async () => { await supabase.auth.signOut(); setProfile(null); setDenied(false); }, []);
 
-  return <Ctx.Provider value={{ profile, loading, signIn, signOut }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ profile, denied, loading, signIn, signOut }}>{children}</Ctx.Provider>;
 }
