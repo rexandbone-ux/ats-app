@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "@/lib/supabase";
 import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Role, Section } from "@/lib/auth";
 
 type C = { id: string; first_name: string; last_name: string; email?: string; phone?: string; current_title?: string; current_company?: string; status: string; source?: string; city?: string; state?: string; skills?: string[]; experience_years?: number; rating?: number; overall_score?: number; resume_text?: string; screening_responses?: any; application_answers?: any; notes?: string; ai_recommendation?: string; ai_analysis?: any; created_at: string };
@@ -644,6 +644,303 @@ function ChatWidget() {
 }
 
 /* ---------------- Login ---------------- */
+/* ---------------- Sourcing + Campaigns (Apollo / Clay / multichannel outreach) ---------------- */
+const REGIONS = [
+  { l: "United States", v: "United States" },
+  { l: "South Africa", v: "South Africa" },
+  { l: "Philippines", v: "Philippines" },
+];
+async function srcCall(path: string, body: any) {
+  const { data: sess } = await supabase.auth.getSession();
+  const tok = sess?.session?.access_token || SUPABASE_ANON_KEY;
+  const r = await fetch(SUPABASE_URL + "/functions/v1/" + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: "Bearer " + tok },
+    body: JSON.stringify(body),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.error) throw new Error(d.error || ("Request failed (" + r.status + ")"));
+  return d;
+}
+function RegionChips({ value, onPick }: { value: string; onPick: (v: string) => void }) {
+  return <div className="flex gap-1.5 flex-wrap mt-1">{REGIONS.map(r =>
+    <button key={r.v} type="button" onClick={() => onPick(value && value.includes(r.v) ? value : (value ? value + ", " : "") + r.v)}
+      className={"text-[11px] px-2 py-1 rounded-full border " + (value && value.includes(r.v) ? "bg-slate-800 text-white border-slate-800" : "text-gray-600 hover:border-slate-400")}>{r.l}</button>)}
+  </div>;
+}
+
+function Sourcing({ editable }: { editable: boolean }) {
+  const [jobs, setJobs] = useState<any[]>([]); const [jobId, setJobId] = useState("");
+  const [titles, setTitles] = useState(""); const [locs, setLocs] = useState("");
+  const [ver, setVer] = useState(true); const [per, setPer] = useState(25);
+  const [rows, setRows] = useState<any[]>([]); const [sel, setSel] = useState<Set<number>>(new Set());
+  const [total, setTotal] = useState<number | null>(null);
+  const [busy, setBusy] = useState(""); const [msg, setMsg] = useState<{ t: string; ok: boolean } | null>(null);
+  const [recent, setRecent] = useState<any[]>([]);
+  const loadRecent = useCallback(async () => {
+    const { data } = await supabase.from("candidates").select("id,first_name,last_name,current_title,outreach_status,created_at").eq("source", "apollo").order("created_at", { ascending: false }).limit(8);
+    setRecent(data || []);
+  }, []);
+  useEffect(() => {
+    supabase.from("jobs").select("id,title,location,status").eq("status", "open").order("created_at", { ascending: false }).then(({ data }) => setJobs(data || []));
+    loadRecent();
+  }, [loadRecent]);
+  function pickJob(id: string) {
+    setJobId(id); const j = jobs.find(x => x.id === id); if (!j) return;
+    if (!titles.trim()) setTitles(String(j.title || "").split("(")[0].trim());
+    if (!locs.trim() && j.location && j.location.toLowerCase() !== "remote") setLocs(j.location);
+  }
+  async function search() {
+    setMsg(null); setSel(new Set()); setTotal(null);
+    const t = titles.split(",").map(s => s.trim()).filter(Boolean);
+    if (!t.length) { setMsg({ t: "Add at least one job title.", ok: false }); return; }
+    setBusy("search");
+    try {
+      const d = await srcCall("outreach-agent", { action: "preview", titles: t, locations: locs.split(",").map(s => s.trim()).filter(Boolean), verified_only: ver });
+      setRows(d.sample || []); setTotal(d.total ?? 0);
+      if (!(d.sample || []).length) setMsg({ t: "No matches. Try fewer filters.", ok: false });
+    } catch (e: any) { setMsg({ t: e.message, ok: false }); }
+    setBusy("");
+  }
+  async function importNow() {
+    const t = titles.split(",").map(s => s.trim()).filter(Boolean);
+    const n = Math.min(per, 25);
+    if (!confirm("Import up to " + n + " people into the ATS? This reveals emails and uses up to " + n + " Apollo credits.")) return;
+    setBusy("import"); setMsg(null);
+    try {
+      const c = await srcCall("outreach-agent", { action: "create", name: "Quick import " + new Date().toLocaleDateString(), job_id: jobId || null, titles: t, locations: locs.split(",").map(s => s.trim()).filter(Boolean), verified_only: ver, auto_enroll: false, create_sequence: false, daily_source_limit: n });
+      const r = await srcCall("outreach-agent", { action: "run", campaign_id: c.campaign.id });
+      const src = (r.results && r.results[0] && r.results[0].source) || {};
+      await srcCall("outreach-agent", { action: "delete", campaign_id: c.campaign.id });
+      setMsg({ ok: true, t: (src.sourced || 0) + " imported to Candidates" + (src.no_email ? ", " + src.no_email + " had no email" : "") + (jobId ? ", linked to the selected job." : ".") });
+      loadRecent();
+    } catch (e: any) { setMsg({ t: e.message, ok: false }); }
+    setBusy("");
+  }
+  return <div>
+    <div className="mb-4"><h1 className="text-xl font-semibold">Sourcing</h1><p className="text-xs text-gray-400">Search Apollo for candidates in any region. Searching is free; credits are only used when you import.</p></div>
+    <div className="grid md:grid-cols-4 gap-4">
+      <div className="md:col-span-3 space-y-4">
+        <div className="bg-white rounded-xl border p-4">
+          <div className="grid md:grid-cols-2 gap-3">
+            <label className="block"><span className="text-xs text-gray-500">Fill for position</span>
+              <select value={jobId} onChange={e => pickJob(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm mt-1">
+                <option value="">Not linked to a position</option>
+                {jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
+              </select></label>
+            <Field label="Job titles (comma separated)" value={titles} onChange={(e: any) => setTitles(e.target.value)} placeholder="director of nursing, ADON" />
+            <label className="block md:col-span-2"><span className="text-xs text-gray-500">Locations</span>
+              <input value={locs} onChange={e => setLocs(e.target.value)} placeholder="New Jersey / United States / South Africa / Philippines" className="w-full px-3 py-2 border rounded-lg text-sm mt-1" />
+              <RegionChips value={locs} onPick={setLocs} />
+            </label>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap mt-3">
+            <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={ver} onChange={e => setVer(e.target.checked)} className="w-4 h-4" /> Verified emails only</label>
+            <select value={per} onChange={e => setPer(Number(e.target.value))} className="px-2 py-1.5 border rounded-lg text-xs">{[10, 25].map(n => <option key={n} value={n}>import {n}</option>)}</select>
+            <button disabled={!!busy} onClick={search} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">{busy === "search" ? "Searching..." : "Search Apollo"}</button>
+            {editable && total !== null && total > 0 && <button disabled={!!busy} onClick={importNow} className="border px-4 py-2 rounded-lg text-sm disabled:opacity-50">{busy === "import" ? "Importing..." : "Import to ATS"}</button>}
+            {total !== null && <span className="text-xs text-gray-400">{total.toLocaleString()} matches</span>}
+          </div>
+          {msg && <div className={"mt-3 text-xs px-3 py-2 rounded-lg " + (msg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600")}>{msg.t}</div>}
+        </div>
+        {rows.length > 0 && <div className="bg-white rounded-xl border overflow-hidden">
+          <table className="w-full text-sm"><thead><tr className="border-b text-left bg-gray-50/60">{["Name", "Title", "Company", "Location", "Email"].map(h => <th key={h} className="px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase">{h}</th>)}</tr></thead>
+          <tbody className="divide-y divide-gray-50">{rows.map((r, i) => <tr key={i} className="hover:bg-gray-50">
+            <td className="px-3 py-2 font-medium">{r.name}</td>
+            <td className="px-3 py-2 text-gray-500">{r.title || ""}</td>
+            <td className="px-3 py-2 text-gray-500">{r.company || ""}</td>
+            <td className="px-3 py-2 text-gray-500 text-xs">{[r.city, r.state].filter(Boolean).join(", ")}</td>
+            <td className="px-3 py-2"><span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700">{r.email_status || ""}</span></td>
+          </tr>)}</tbody></table>
+          <div className="px-3 py-2 text-[11px] text-gray-400 border-t">Sample of 10. Import pulls up to your chosen batch with full names and revealed emails, deduped against your ATS.</div>
+        </div>}
+      </div>
+      <div className="bg-white rounded-xl border p-4 self-start">
+        <h3 className="text-sm font-medium mb-2">Recently sourced</h3>
+        {recent.length === 0 ? <p className="text-xs text-gray-400">Nothing sourced yet.</p> :
+          <div className="divide-y divide-gray-50">{recent.map(c => <div key={c.id} className="py-2">
+            <div className="text-sm font-medium">{c.first_name} {c.last_name}</div>
+            <div className="text-[10px] text-gray-400">{c.current_title || ""} {c.outreach_status ? "/ " + c.outreach_status : ""}</div>
+          </div>)}</div>}
+      </div>
+    </div>
+  </div>;
+}
+
+function Campaigns({ editable }: { editable: boolean }) {
+  const [data, setData] = useState<any>(null);
+  const [jobs, setJobs] = useState<any[]>([]);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState<{ t: string; ok: boolean } | null>(null);
+  const [prev, setPrev] = useState<any>(null);
+  const [detail, setDetail] = useState<any>(null);
+  const [f, setF] = useState<any>({ name: "", job_id: "", titles: "", locations: "", limit: 10, verified: true, clay: false, auto: true });
+  const load = useCallback(async () => {
+    try {
+      const h = await srcCall("outreach-agent", { action: "health" });
+      const l = await srcCall("outreach-agent", { action: "list" });
+      setData({ health: h, campaigns: l.campaigns || [] });
+    } catch (e: any) { setData({ health: {}, campaigns: [] }); setMsg({ t: e.message, ok: false }); }
+  }, []);
+  useEffect(() => {
+    load();
+    supabase.from("jobs").select("id,title,location,status").eq("status", "open").order("created_at", { ascending: false }).then(({ data }) => setJobs(data || []));
+  }, [load]);
+  function pickJob(id: string) {
+    const j = jobs.find(x => x.id === id);
+    setF((prevF: any) => ({ ...prevF, job_id: id,
+      name: prevF.name || (j ? j.title : ""),
+      titles: prevF.titles || (j ? String(j.title || "").split("(")[0].trim() : ""),
+      locations: prevF.locations || (j && j.location && j.location.toLowerCase() !== "remote" ? j.location : "") }));
+  }
+  const payload = () => ({ name: f.name.trim(), job_id: f.job_id || null,
+    titles: f.titles.split(",").map((s: string) => s.trim()).filter(Boolean),
+    locations: f.locations.split(",").map((s: string) => s.trim()).filter(Boolean),
+    verified_only: f.verified, enrich_with_clay: f.clay, auto_enroll: f.auto,
+    daily_source_limit: Number(f.limit) || 10 });
+  async function preview() {
+    setBusy("preview"); setMsg(null); setPrev(null);
+    try { setPrev(await srcCall("outreach-agent", { action: "preview", ...payload() })); }
+    catch (e: any) { setMsg({ t: e.message, ok: false }); }
+    setBusy("");
+  }
+  async function create() {
+    const pl = payload();
+    if (!pl.name) { setMsg({ t: "Give the campaign a name.", ok: false }); return; }
+    if (!pl.titles.length) { setMsg({ t: "Add at least one job title.", ok: false }); return; }
+    setBusy("create"); setMsg(null);
+    try {
+      await srcCall("outreach-agent", { action: "create", ...pl });
+      setMsg({ t: "Campaign created. Sequence written; sourcing runs hourly 9-5 weekdays.", ok: true });
+      setF({ name: "", job_id: "", titles: "", locations: "", limit: 10, verified: true, clay: false, auto: true });
+      setPrev(null); load();
+    } catch (e: any) { setMsg({ t: e.message, ok: false }); }
+    setBusy("");
+  }
+  async function run(id?: string) {
+    setBusy("run"); setMsg(null);
+    try {
+      const d = await srcCall("outreach-agent", { action: "run", campaign_id: id });
+      const r = (d.results && d.results[0]) || {};
+      const src = r.source || {}; const enr = r.enroll || {};
+      setMsg({ ok: true, t: "Sourced " + (src.sourced || 0) + ", enrolled " + (enr.enrolled || 0) + ", emails sent " + ((d.send && d.send.emails_sent) || 0) + "." + (src.error ? " " + src.error : "") + (src.note ? " " + src.note : "") });
+      load();
+    } catch (e: any) { setMsg({ t: e.message, ok: false }); }
+    setBusy("");
+  }
+  async function toggle(c: any) {
+    try { await srcCall("outreach-agent", { action: c.status === "active" ? "pause" : "resume", campaign_id: c.id }); load(); }
+    catch (e: any) { setMsg({ t: e.message, ok: false }); }
+  }
+  async function remove(id: string) {
+    if (!confirm("Delete this campaign? People already sourced stay in your ATS.")) return;
+    try { await srcCall("outreach-agent", { action: "delete", campaign_id: id }); setDetail(null); load(); }
+    catch (e: any) { setMsg({ t: e.message, ok: false }); }
+  }
+  async function showPeople(c: any) {
+    const { data: rows } = await supabase.from("campaign_members")
+      .select("id,stage,note,sourced_at,candidates(id,first_name,last_name,email,phone,current_title,current_company,last_outreach_at)")
+      .eq("campaign_id", c.id).order("sourced_at", { ascending: false }).limit(200);
+    setDetail({ campaign: c, rows: rows || [] });
+  }
+  if (!data) return <div className="py-20 text-center text-gray-400">Loading...</div>;
+  const h = data.health || {};
+  const chip = (on: boolean) => on ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600";
+  return <div>
+    <div className="flex justify-between items-start mb-4 flex-wrap gap-2">
+      <div><h1 className="text-xl font-semibold">Campaigns</h1>
+      <p className="text-xs text-gray-400">Automated pipeline: Apollo sourcing, Clay enrichment, then multichannel outreach (email + text auto-send, calls become tasks). Runs hourly, 9-5 weekdays.</p></div>
+      <div className="flex gap-1.5 items-center flex-wrap">
+        <span className={"px-2 py-0.5 rounded-full text-[10px] font-semibold " + chip(!!h.apollo_search)}>Apollo</span>
+        <span className={"px-2 py-0.5 rounded-full text-[10px] font-semibold " + chip(!!h.clay)}>Clay</span>
+        <span className={"px-2 py-0.5 rounded-full text-[10px] font-semibold " + chip(!!h.resend)}>Email</span>
+        <span className="px-2 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-600">{h.active_enrollments || 0} in sequence</span>
+      </div>
+    </div>
+    {h.resend === false && <div className="mb-4 text-xs px-3 py-2 rounded-lg bg-red-50 text-red-600"><b>Emails cannot send yet.</b> Add RESEND_API_KEY in Supabase secrets. Sourcing, texting, and call tasks still work; emails queue and go out once configured.</div>}
+    {h.resend && h.sandbox_from && <div className="mb-4 text-xs px-3 py-2 rounded-lg bg-yellow-50 text-yellow-800"><b>Sandbox sender.</b> {h.from_email} only delivers to your own inbox.</div>}
+    {editable && <div className="bg-white rounded-xl border p-4 mb-4">
+      <h3 className="text-sm font-medium mb-3">New campaign</h3>
+      <div className="grid md:grid-cols-3 gap-3">
+        <label className="block"><span className="text-xs text-gray-500">Fill for position</span>
+          <select value={f.job_id} onChange={e => pickJob(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm mt-1">
+            <option value="">Not linked</option>
+            {jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}
+          </select></label>
+        <Field label="Campaign name" value={f.name} onChange={(e: any) => setF({ ...f, name: e.target.value })} placeholder="DON North Jersey" />
+        <Field label="Job titles (comma separated)" value={f.titles} onChange={(e: any) => setF({ ...f, titles: e.target.value })} placeholder="director of nursing, ADON" />
+        <label className="block md:col-span-2"><span className="text-xs text-gray-500">Locations</span>
+          <input value={f.locations} onChange={e => setF({ ...f, locations: e.target.value })} placeholder="New Jersey / United States / South Africa / Philippines" className="w-full px-3 py-2 border rounded-lg text-sm mt-1" />
+          <RegionChips value={f.locations} onPick={(v: string) => setF({ ...f, locations: v })} />
+        </label>
+        <Field label="People per day" type="number" value={f.limit} onChange={(e: any) => setF({ ...f, limit: e.target.value })} />
+      </div>
+      <div className="flex items-center gap-4 flex-wrap mb-3 mt-1">
+        <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={f.verified} onChange={e => setF({ ...f, verified: e.target.checked })} className="w-4 h-4" /> Verified emails only</label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={f.clay} onChange={e => setF({ ...f, clay: e.target.checked })} className="w-4 h-4" /> Enrich via Clay first</label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600"><input type="checkbox" checked={f.auto} onChange={e => setF({ ...f, auto: e.target.checked })} className="w-4 h-4" /> Auto-enroll into sequence</label>
+      </div>
+      <div className="flex gap-2 items-center flex-wrap">
+        <button disabled={!!busy} onClick={preview} className="border px-3 py-2 rounded-lg text-sm disabled:opacity-50">{busy === "preview" ? "Checking..." : "Preview matches (free)"}</button>
+        <button disabled={!!busy} onClick={create} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">{busy === "create" ? "Creating..." : "Create campaign"}</button>
+        <span className="text-xs text-gray-400">Titles + location do the work. Keywords usually narrow to zero.</span>
+      </div>
+      {msg && <div className={"mt-3 text-xs px-3 py-2 rounded-lg " + (msg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600")}>{msg.t}</div>}
+      {prev && <div className="mt-3">
+        <div className="text-xs text-green-700 mb-2"><b>{(prev.total || 0).toLocaleString()}</b> people match. No credits used.</div>
+        <table className="w-full text-sm"><thead><tr className="border-b text-left">{["Name", "Title", "Company"].map(x => <th key={x} className="px-2 py-1 text-[10px] font-semibold text-gray-400 uppercase">{x}</th>)}</tr></thead>
+        <tbody className="divide-y divide-gray-50">{(prev.sample || []).map((pp: any, i: number) => <tr key={i}><td className="px-2 py-1.5">{pp.name}</td><td className="px-2 py-1.5 text-gray-500">{pp.title}</td><td className="px-2 py-1.5 text-gray-500">{pp.company}</td></tr>)}</tbody></table>
+      </div>}
+    </div>}
+    <div className="space-y-3">
+      {(data.campaigns || []).length === 0 && <p className="text-sm text-gray-400">No campaigns yet.</p>}
+      {(data.campaigns || []).map((c: any) => {
+        const fn = c.funnel || {};
+        return <div key={c.id} className="bg-white rounded-xl border p-4">
+          <div className="flex justify-between items-start flex-wrap gap-2">
+            <div>
+              <span className="font-semibold mr-2">{c.name}</span>
+              <span className={"text-[10px] px-2 py-0.5 rounded-full " + (c.status === "active" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600")}>{c.status}</span>
+              <div className="text-[11px] text-gray-400 mt-1">{c.jobs ? c.jobs.title + " / " : ""}{(c.titles || []).join(", ")}{c.locations && c.locations.length ? " / " + c.locations.join(", ") : ""} / {c.daily_source_limit} per day / last run {c.last_run_at ? new Date(c.last_run_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "never"}</div>
+            </div>
+            {editable && <div className="flex gap-1.5 flex-wrap">
+              <button onClick={() => showPeople(c)} className="text-xs px-2.5 py-1.5 border rounded-lg">People</button>
+              <button disabled={!!busy} onClick={() => run(c.id)} className="text-xs px-2.5 py-1.5 border rounded-lg disabled:opacity-50">{busy === "run" ? "Running..." : "Run now"}</button>
+              <button onClick={() => toggle(c)} className="text-xs px-2.5 py-1.5 border rounded-lg">{c.status === "active" ? "Pause" : "Resume"}</button>
+              <button onClick={() => remove(c.id)} className="text-xs px-2.5 py-1.5 border rounded-lg text-red-600">Delete</button>
+            </div>}
+          </div>
+          <div className="flex mt-3 rounded-lg border overflow-hidden">
+            {["sourced", "enriching", "enriched", "enrolled", "skipped"].map(k =>
+              <div key={k} className="flex-1 text-center py-2 border-r last:border-r-0 bg-gray-50/60">
+                <div className="text-lg font-semibold">{fn[k] || 0}</div>
+                <div className="text-[9px] text-gray-400 uppercase tracking-wide">{k}</div>
+              </div>)}
+          </div>
+        </div>;
+      })}
+    </div>
+    {detail && <div className="bg-white rounded-xl border p-4 mt-4">
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="text-sm font-medium">{detail.campaign.name} ({detail.rows.length} people)</h3>
+        <button onClick={() => setDetail(null)} className="text-xs px-2 py-1 border rounded-lg">Close</button>
+      </div>
+      <table className="w-full text-sm"><thead><tr className="border-b text-left">{["Name", "Title", "Company", "Email", "Phone", "Stage"].map(x => <th key={x} className="px-2 py-1 text-[10px] font-semibold text-gray-400 uppercase">{x}</th>)}</tr></thead>
+      <tbody className="divide-y divide-gray-50">{detail.rows.map((m: any) => {
+        const cc = m.candidates || {};
+        return <tr key={m.id} className="hover:bg-gray-50">
+          <td className="px-2 py-1.5 font-medium">{cc.first_name} {cc.last_name}</td>
+          <td className="px-2 py-1.5 text-gray-500">{cc.current_title || ""}</td>
+          <td className="px-2 py-1.5 text-gray-500">{cc.current_company || ""}</td>
+          <td className="px-2 py-1.5 text-gray-500 text-xs">{cc.email || ""}</td>
+          <td className="px-2 py-1.5 text-gray-500 text-xs">{cc.phone || "-"}</td>
+          <td className="px-2 py-1.5"><span className={"text-[10px] px-2 py-0.5 rounded-full " + (m.stage === "enrolled" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600")}>{m.stage}</span>{m.note ? <span className="text-[10px] text-gray-400 ml-1">{m.note}</span> : null}</td>
+        </tr>;
+      })}</tbody></table>
+    </div>}
+  </div>;
+}
+
 function Login() {
   const { signIn } = useAuth();
   const [email, setEmail] = useState(""); const [pw, setPw] = useState(""); const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
@@ -653,7 +950,7 @@ function Login() {
 
 /* ---------------- Shell ---------------- */
 const NV: { id: Section; l: string; i: string }[] = [
-  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "sourcing", l: "Sourcing", i: "\u{1F3AF}" }, { id: "outreach", l: "Outreach", i: "\u{1F4E8}" }, { id: "settings", l: "Settings", i: "⚙️" }];
+  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "sourcing", l: "Sourcing", i: "\u{1F3AF}" }, { id: "outreach", l: "Outreach", i: "\u{1F4E8}" }, { id: "campaigns", l: "Campaigns", i: "\u{1F916}" }, { id: "settings", l: "Settings", i: "⚙️" }];
 
 export default function Home() {
   const { profile, loading, signOut } = useAuth();
@@ -684,8 +981,9 @@ export default function Home() {
       case "tasks": return allowed("tasks") ? <Tasks /> : <Denied />;
       case "reports": return allowed("reports") ? <Reports /> : <Denied />;
       case "search": return allowed("search") ? <Search nav={nav} /> : <Denied />;
-      case "sourcing": return allowed("sourcing") ? <Sourcing /> : <Denied />;
+      case "sourcing": return allowed("sourcing") ? <Sourcing editable={editable} /> : <Denied />;
       case "outreach": return allowed("outreach") ? <Outreach /> : <Denied />;
+      case "campaigns": return allowed("outreach") ? <Campaigns editable={editable} /> : <Denied />;
       case "settings": return canManageUsers(role) ? <Settings /> : <Denied />;
       default: return <Dash nav={nav} />;
     }
@@ -704,11 +1002,7 @@ export default function Home() {
     <ChatWidget />
   </div>;
 }
-function Sourcing() {
-  return <div className="bg-white rounded-xl border overflow-hidden" style={{ height: "calc(100vh - 7.5rem)" }}>
-    <iframe src="https://nwknnsbiroppdaraxmxp.supabase.co/functions/v1/sourcing-app" title="Sourcing" className="w-full h-full border-0" />
-  </div>;
-}
+
 function Outreach() {
   return <div className="bg-white rounded-xl border overflow-hidden" style={{ height: "calc(100vh - 7.5rem)" }}>
     <iframe src="https://nwknnsbiroppdaraxmxp.supabase.co/functions/v1/outreach" title="Outreach" className="w-full h-full border-0" />
