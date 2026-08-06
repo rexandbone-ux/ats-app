@@ -669,6 +669,100 @@ function RegionChips({ value, onPick }: { value: string; onPick: (v: string) => 
   </div>;
 }
 
+function ClaudeSearch({ editable }: { editable: boolean }) {
+  const EXAMPLES = ["philippine CPA with cell numbers", "director of nursing in new jersey", "senior bookkeepers in south africa", "ADONs at skilled nursing facilities in NJ"];
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState<any>(null);
+  const [sel, setSel] = useState<Record<string, boolean>>({});
+  const [jobs, setJobs] = useState<any[]>([]); const [jobId, setJobId] = useState("");
+  const [camps, setCamps] = useState<any[]>([]); const [campId, setCampId] = useState("");
+  const [busy, setBusy] = useState(""); const [msg, setMsg] = useState<{ t: string; ok: boolean } | null>(null);
+  useEffect(() => {
+    supabase.from("jobs").select("id,title,status").eq("status", "open").order("created_at", { ascending: false }).then(({ data }) => setJobs(data || []));
+    supabase.from("outreach_campaigns").select("id,name,status").eq("status", "active").order("created_at", { ascending: false }).then(({ data }) => setCamps(data || []));
+  }, []);
+  async function run(text?: string, page = 1) {
+    const query = (text ?? q).trim();
+    if (!query) return;
+    setQ(query); setBusy("search"); setMsg(null); if (page === 1) setSel({});
+    try {
+      const d = await srcCall("ai-search", { query, page, limit: 25 });
+      setRes(d);
+      if (!(d.people || []).length) setMsg({ t: d.phone_filtered ? "Nobody on this page had a phone on file. Try Next page." : "No matches. Try naming the job title more directly.", ok: false });
+    } catch (e: any) { setMsg({ t: e.message, ok: false }); setRes(null); }
+    setBusy("");
+  }
+  const selIds = Object.keys(sel).filter(k => sel[k]);
+  async function importSel(withPhones: boolean) {
+    if (!selIds.length) { setMsg({ t: "Tick some people first.", ok: false }); return; }
+    if (!confirm("Import " + selIds.length + " people? Uses about " + selIds.length + " Apollo credits" + (withPhones ? ", plus phone credits for the reveal." : "."))) return;
+    setBusy("import"); setMsg(null);
+    try {
+      const d = await srcCall("outreach-agent", { action: "import", apollo_ids: selIds.slice(0, 25), job_id: jobId || null, campaign_id: campId || null, source_label: "Claude search: " + q.slice(0, 60) });
+      let extra = "";
+      if (withPhones && (d.candidate_ids || []).length) {
+        const ph = await srcCall("apollo-phone", { action: "reveal", candidate_ids: d.candidate_ids });
+        extra = " Phone reveal requested for " + (ph.requested || 0) + " \u2014 numbers land on the profiles within a minute.";
+      }
+      setMsg({ ok: true, t: (d.imported || 0) + " imported" + (d.dupes ? ", " + d.dupes + " already in ATS" : "") + (d.no_email ? ", " + d.no_email + " had no email" : "") + "." + extra });
+      setSel({});
+    } catch (e: any) { setMsg({ t: e.message, ok: false }); }
+    setBusy("");
+  }
+  const f = res?.filters || {};
+  return <div>
+    <div className="mb-4"><h1 className="text-xl font-semibold">Claude Search</h1>
+      <p className="text-xs text-gray-400">Describe who you need in plain English. Claude turns it into an Apollo search, you pick who to keep.</p></div>
+    <div className="bg-white rounded-xl border p-4 mb-4">
+      <div className="flex gap-2 flex-wrap">
+        <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === "Enter") run(); }}
+          placeholder="philippine CPA with cell numbers" className="flex-1 min-w-[260px] px-3 py-2.5 border rounded-lg text-sm" />
+        <button disabled={!!busy} onClick={() => run()} className="bg-slate-800 text-white px-5 py-2.5 rounded-lg text-sm disabled:opacity-50">{busy === "search" ? "Searching..." : "Search"}</button>
+      </div>
+      <div className="flex gap-1.5 flex-wrap mt-2">{EXAMPLES.map(x =>
+        <button key={x} onClick={() => run(x)} className="text-[11px] px-2 py-1 rounded-full border text-gray-500 hover:border-slate-400">{x}</button>)}</div>
+      {msg && <div className={"mt-3 text-xs px-3 py-2 rounded-lg " + (msg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600")}>{msg.t}</div>}
+    </div>
+    {res && <div className="bg-white rounded-xl border p-3 mb-4 text-xs">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-gray-400">Understood as</span>
+        {(f.titles || []).map((t: string) => <span key={t} className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">{t}</span>)}
+        {(f.locations || []).map((t: string) => <span key={t} className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">{t}</span>)}
+        {(f.seniorities || []).map((t: string) => <span key={t} className="px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">{t}</span>)}
+        {res.phone_filtered && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">has phone</span>}
+        <span className="ml-auto text-gray-400">{(res.total || 0).toLocaleString()} matches{res.phone_filtered ? " \u00b7 " + (res.people || []).length + " with a phone on this page" : ""} \u00b7 {res.engine === "claude" ? "Claude" : "rules engine"}</span>
+      </div>
+    </div>}
+    {res && (res.people || []).length > 0 && <div className="bg-white rounded-xl border overflow-hidden">
+      {editable && <div className="flex gap-2 items-center flex-wrap px-3 py-2 border-b bg-gray-50/60">
+        <span className="text-xs text-gray-500">{selIds.length} selected</span>
+        <button onClick={() => { const n: any = {}; (res.people || []).forEach((r: any) => n[r.apollo_id] = true); setSel(n); }} className="text-xs px-2 py-1 border rounded-lg bg-white">Select all</button>
+        <button onClick={() => setSel({})} className="text-xs px-2 py-1 border rounded-lg bg-white">Clear</button>
+        <select value={jobId} onChange={e => setJobId(e.target.value)} className="text-xs px-2 py-1.5 border rounded-lg bg-white"><option value="">No position</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}</select>
+        <select value={campId} onChange={e => setCampId(e.target.value)} className="text-xs px-2 py-1.5 border rounded-lg bg-white"><option value="">No campaign</option>{camps.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+        <button disabled={!!busy || !selIds.length} onClick={() => importSel(false)} className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 text-white disabled:opacity-50">{busy === "import" ? "Working..." : "Import"}</button>
+        <button disabled={!!busy || !selIds.length} onClick={() => importSel(true)} className="text-xs px-2.5 py-1.5 border rounded-lg bg-white disabled:opacity-50">Import + get numbers</button>
+      </div>}
+      <table className="w-full text-sm"><thead><tr className="border-b text-left bg-gray-50/60"><th className="px-3 py-2 w-8"></th>{["Name", "Title", "Company", "Location", "Contact", ""].map((h, i) => <th key={i} className="px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase">{h}</th>)}</tr></thead>
+      <tbody className="divide-y divide-gray-50">{(res.people || []).map((r: any) => <tr key={r.apollo_id} className="hover:bg-gray-50">
+        <td className="px-3 py-2"><input type="checkbox" checked={!!sel[r.apollo_id]} onChange={e => setSel({ ...sel, [r.apollo_id]: e.target.checked })} className="w-4 h-4" /></td>
+        <td className="px-3 py-2 font-medium">{r.name}</td>
+        <td className="px-3 py-2 text-gray-500">{r.title}</td>
+        <td className="px-3 py-2 text-gray-500">{r.company}{r.company_size ? <span className="text-[10px] text-gray-400 ml-1">({r.company_size})</span> : null}</td>
+        <td className="px-3 py-2 text-gray-500 text-xs">{[r.city, r.state, r.country].filter(Boolean).join(", ")}</td>
+        <td className="px-3 py-2"><span className={"px-1.5 py-0.5 rounded text-[10px] font-semibold mr-1 " + (r.has_email ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400")}>@</span><span className={"px-1.5 py-0.5 rounded text-[10px] font-semibold " + (r.has_phone ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400")}>tel</span></td>
+        <td className="px-3 py-2">{r.linkedin_url ? <a href={r.linkedin_url} target="_blank" rel="noreferrer" className="text-blue-600 text-xs hover:underline">in</a> : null}</td>
+      </tr>)}</tbody></table>
+      <div className="flex items-center gap-2 px-3 py-2 border-t text-xs text-gray-500">
+        <button disabled={(res.page || 1) <= 1 || !!busy} onClick={() => run(q, (res.page || 1) - 1)} className="px-2 py-1 border rounded-lg disabled:opacity-40">Prev</button>
+        <span>Page {res.page || 1} of {(res.total_pages || 1).toLocaleString()}</span>
+        <button disabled={(res.page || 1) >= (res.total_pages || 1) || !!busy} onClick={() => run(q, (res.page || 1) + 1)} className="px-2 py-1 border rounded-lg disabled:opacity-40">Next</button>
+        <span className="text-gray-400">Names unblur on import.</span>
+      </div>
+    </div>}
+  </div>;
+}
+
 function Sourcing({ editable }: { editable: boolean }) {
   const SENIOR = ["owner","founder","c_suite","vp","head","director","manager","senior","entry"];
   const SIZES = [["1,10","1-10"],["11,50","11-50"],["51,200","51-200"],["201,500","201-500"],["501,1000","501-1K"],["1001,5000","1K-5K"],["5001,10000","5K+"]];
@@ -1013,7 +1107,7 @@ function Login() {
 
 /* ---------------- Shell ---------------- */
 const NV: { id: Section; l: string; i: string }[] = [
-  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "sourcing", l: "Sourcing", i: "\u{1F3AF}" }, { id: "outreach", l: "Outreach", i: "\u{1F4E8}" }, { id: "campaigns", l: "Campaigns", i: "\u{1F916}" }, { id: "settings", l: "Settings", i: "⚙️" }];
+  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "sourcing", l: "Sourcing", i: "\u{1F3AF}" }, { id: "outreach", l: "Outreach", i: "\u{1F4E8}" }, { id: "claudesearch", l: "Claude Search", i: "\u{2728}" }, { id: "campaigns", l: "Campaigns", i: "\u{1F916}" }, { id: "settings", l: "Settings", i: "⚙️" }];
 
 export default function Home() {
   const { profile, loading, signOut } = useAuth();
@@ -1046,6 +1140,7 @@ export default function Home() {
       case "search": return allowed("search") ? <Search nav={nav} /> : <Denied />;
       case "sourcing": return allowed("sourcing") ? <Sourcing editable={editable} /> : <Denied />;
       case "outreach": return allowed("outreach") ? <Outreach /> : <Denied />;
+      case "claudesearch": return allowed("sourcing") ? <ClaudeSearch editable={editable} /> : <Denied />;
       case "campaigns": return allowed("outreach") ? <Campaigns editable={editable} /> : <Denied />;
       case "settings": return canManageUsers(role) ? <Settings /> : <Denied />;
       default: return <Dash nav={nav} />;
