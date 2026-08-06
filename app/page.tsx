@@ -670,96 +670,75 @@ function RegionChips({ value, onPick }: { value: string; onPick: (v: string) => 
 }
 
 function ClaudeSearch({ editable }: { editable: boolean }) {
-  const EXAMPLES = ["philippine CPA with cell numbers", "director of nursing in new jersey", "senior bookkeepers in south africa", "ADONs at skilled nursing facilities in NJ"];
+  const EXAMPLES = ["Philippine CPAs with cell numbers I can call", "Find DONs in New Jersey and import the 10 best", "Who at CareOne is in nursing leadership?", "Show me everyone in my ATS with a phone number"];
   const [q, setQ] = useState("");
-  const [res, setRes] = useState<any>(null);
-  const [sel, setSel] = useState<Record<string, boolean>>({});
-  const [jobs, setJobs] = useState<any[]>([]); const [jobId, setJobId] = useState("");
-  const [camps, setCamps] = useState<any[]>([]); const [campId, setCampId] = useState("");
-  const [busy, setBusy] = useState(""); const [msg, setMsg] = useState<{ t: string; ok: boolean } | null>(null);
-  useEffect(() => {
-    supabase.from("jobs").select("id,title,status").eq("status", "open").order("created_at", { ascending: false }).then(({ data }) => setJobs(data || []));
-    supabase.from("outreach_campaigns").select("id,name,status").eq("status", "active").order("created_at", { ascending: false }).then(({ data }) => setCamps(data || []));
-  }, []);
-  async function run(text?: string, page = 1) {
-    const query = (text ?? q).trim();
-    if (!query) return;
-    setQ(query); setBusy("search"); setMsg(null); if (page === 1) setSel({});
+  const [log, setLog] = useState<any[]>([]);
+  const [convo, setConvo] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [needsKey, setNeedsKey] = useState(false);
+  const [model, setModel] = useState("");
+  const endRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [log, busy]);
+  async function send(text?: string) {
+    const msg = (text ?? q).trim();
+    if (!msg || busy) return;
+    setQ(""); setErr(null); setBusy(true);
+    setLog(l => [...l, { who: "you", text: msg }]);
+    const next = [...convo, { role: "user", content: msg }];
     try {
-      const d = await srcCall("ai-search", { query, page, limit: 25 });
-      setRes(d);
-      if (!(d.people || []).length) setMsg({ t: d.phone_filtered ? "Nobody on this page had a phone on file. Try Next page." : "No matches. Try naming the job title more directly.", ok: false });
-    } catch (e: any) { setMsg({ t: e.message, ok: false }); setRes(null); }
-    setBusy("");
+      const d = await srcCall("claude-agent", { messages: next });
+      if (d.model) setModel(d.model);
+      setConvo(d.messages || next);
+      setLog(l => [...l, { who: "claude", text: d.reply || "(no reply)", steps: d.steps || [] }]);
+    } catch (e: any) {
+      const m = String(e.message || e);
+      if (m.includes("ANTHROPIC_API_KEY")) setNeedsKey(true);
+      setErr(m);
+    }
+    setBusy(false);
   }
-  const selIds = Object.keys(sel).filter(k => sel[k]);
-  async function importSel(withPhones: boolean) {
-    if (!selIds.length) { setMsg({ t: "Tick some people first.", ok: false }); return; }
-    if (!confirm("Import " + selIds.length + " people? Uses about " + selIds.length + " Apollo credits" + (withPhones ? ", plus phone credits for the reveal." : "."))) return;
-    setBusy("import"); setMsg(null);
-    try {
-      const d = await srcCall("outreach-agent", { action: "import", apollo_ids: selIds.slice(0, 25), job_id: jobId || null, campaign_id: campId || null, source_label: "Claude search: " + q.slice(0, 60) });
-      let extra = "";
-      if (withPhones && (d.candidate_ids || []).length) {
-        const ph = await srcCall("apollo-phone", { action: "reveal", candidate_ids: d.candidate_ids });
-        extra = " Phone reveal requested for " + (ph.requested || 0) + " \u2014 numbers land on the profiles within a minute.";
-      }
-      setMsg({ ok: true, t: (d.imported || 0) + " imported" + (d.dupes ? ", " + d.dupes + " already in ATS" : "") + (d.no_email ? ", " + d.no_email + " had no email" : "") + "." + extra });
-      setSel({});
-    } catch (e: any) { setMsg({ t: e.message, ok: false }); }
-    setBusy("");
-  }
-  const f = res?.filters || {};
-  return <div>
-    <div className="mb-4"><h1 className="text-xl font-semibold">Claude Search</h1>
-      <p className="text-xs text-gray-400">Describe who you need in plain English. Claude turns it into an Apollo search, you pick who to keep.</p></div>
-    <div className="bg-white rounded-xl border p-4 mb-4">
-      <div className="flex gap-2 flex-wrap">
-        <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === "Enter") run(); }}
-          placeholder="philippine CPA with cell numbers" className="flex-1 min-w-[260px] px-3 py-2.5 border rounded-lg text-sm" />
-        <button disabled={!!busy} onClick={() => run()} className="bg-slate-800 text-white px-5 py-2.5 rounded-lg text-sm disabled:opacity-50">{busy === "search" ? "Searching..." : "Search"}</button>
+  function reset() { setLog([]); setConvo([]); setErr(null); }
+  return <div className="max-w-4xl">
+    <div className="flex justify-between items-start mb-4 flex-wrap gap-2">
+      <div><h1 className="text-xl font-semibold">Claude Search</h1>
+      <p className="text-xs text-gray-400">Ask for who you need. Claude searches Apollo, checks your ATS for duplicates, imports, and pulls cell numbers.</p></div>
+      <div className="flex gap-2 items-center">
+        {model && <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-600">{model}</span>}
+        {log.length > 0 && <button onClick={reset} className="text-xs px-2.5 py-1.5 border rounded-lg">New search</button>}
       </div>
-      <div className="flex gap-1.5 flex-wrap mt-2">{EXAMPLES.map(x =>
-        <button key={x} onClick={() => run(x)} className="text-[11px] px-2 py-1 rounded-full border text-gray-500 hover:border-slate-400">{x}</button>)}</div>
-      {msg && <div className={"mt-3 text-xs px-3 py-2 rounded-lg " + (msg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600")}>{msg.t}</div>}
     </div>
-    {res && <div className="bg-white rounded-xl border p-3 mb-4 text-xs">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-gray-400">Understood as</span>
-        {(f.titles || []).map((t: string) => <span key={t} className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">{t}</span>)}
-        {(f.locations || []).map((t: string) => <span key={t} className="px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">{t}</span>)}
-        {(f.seniorities || []).map((t: string) => <span key={t} className="px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">{t}</span>)}
-        {res.phone_filtered && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">has phone</span>}
-        <span className="ml-auto text-gray-400">{(res.total || 0).toLocaleString()} matches{res.phone_filtered ? " \u00b7 " + (res.people || []).length + " with a phone on this page" : ""} \u00b7 {res.engine === "claude" ? "Claude" : "rules engine"}</span>
-      </div>
+    {needsKey && <div className="mb-4 text-xs px-3 py-2.5 rounded-lg bg-red-50 text-red-700">
+      <b>Claude is not connected yet.</b> Add <code>ANTHROPIC_API_KEY</code> at Supabase &rarr; Settings &rarr; Edge Functions &rarr; Secrets. Nothing else to change; it works on the next message.
     </div>}
-    {res && (res.people || []).length > 0 && <div className="bg-white rounded-xl border overflow-hidden">
-      {editable && <div className="flex gap-2 items-center flex-wrap px-3 py-2 border-b bg-gray-50/60">
-        <span className="text-xs text-gray-500">{selIds.length} selected</span>
-        <button onClick={() => { const n: any = {}; (res.people || []).forEach((r: any) => n[r.apollo_id] = true); setSel(n); }} className="text-xs px-2 py-1 border rounded-lg bg-white">Select all</button>
-        <button onClick={() => setSel({})} className="text-xs px-2 py-1 border rounded-lg bg-white">Clear</button>
-        <select value={jobId} onChange={e => setJobId(e.target.value)} className="text-xs px-2 py-1.5 border rounded-lg bg-white"><option value="">No position</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}</select>
-        <select value={campId} onChange={e => setCampId(e.target.value)} className="text-xs px-2 py-1.5 border rounded-lg bg-white"><option value="">No campaign</option>{camps.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
-        <button disabled={!!busy || !selIds.length} onClick={() => importSel(false)} className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 text-white disabled:opacity-50">{busy === "import" ? "Working..." : "Import"}</button>
-        <button disabled={!!busy || !selIds.length} onClick={() => importSel(true)} className="text-xs px-2.5 py-1.5 border rounded-lg bg-white disabled:opacity-50">Import + get numbers</button>
+    <div className="bg-white rounded-xl border overflow-hidden">
+      <div className="p-4 space-y-4 min-h-[320px] max-h-[560px] overflow-y-auto">
+        {log.length === 0 && !busy && <div className="text-center py-10">
+          <p className="text-sm text-gray-400 mb-3">Try one of these:</p>
+          <div className="flex gap-1.5 flex-wrap justify-center">{EXAMPLES.map(x =>
+            <button key={x} onClick={() => send(x)} className="text-[11px] px-2.5 py-1.5 rounded-full border text-gray-600 hover:border-slate-400">{x}</button>)}</div>
+        </div>}
+        {log.map((m, i) => m.who === "you"
+          ? <div key={i} className="flex justify-end"><div className="bg-slate-800 text-white px-3.5 py-2 rounded-2xl rounded-br-sm text-sm max-w-[80%]">{m.text}</div></div>
+          : <div key={i}>
+              {(m.steps || []).length > 0 && <div className="mb-2 space-y-1">{m.steps.map((s: any, j: number) =>
+                <div key={j} className="text-[11px] text-gray-400 flex gap-1.5 items-center">
+                  <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono">{s.tool}</span>
+                  <span>{s.summary}</span>
+                </div>)}</div>}
+              <div className="text-sm whitespace-pre-wrap leading-relaxed">{m.text}</div>
+            </div>)}
+        {busy && <div className="text-xs text-gray-400">Searching...</div>}
+        {err && !needsKey && <div className="text-xs px-3 py-2 rounded-lg bg-red-50 text-red-600">{err}</div>}
+        <div ref={endRef} />
+      </div>
+      {editable && <div className="border-t p-3 flex gap-2">
+        <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === "Enter") send(); }}
+          placeholder="Philippine CPAs with cell numbers I can call" className="flex-1 px-3 py-2.5 border rounded-lg text-sm" />
+        <button disabled={busy || !q.trim()} onClick={() => send()} className="bg-slate-800 text-white px-5 py-2.5 rounded-lg text-sm disabled:opacity-40">Send</button>
       </div>}
-      <table className="w-full text-sm"><thead><tr className="border-b text-left bg-gray-50/60"><th className="px-3 py-2 w-8"></th>{["Name", "Title", "Company", "Location", "Contact", ""].map((h, i) => <th key={i} className="px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase">{h}</th>)}</tr></thead>
-      <tbody className="divide-y divide-gray-50">{(res.people || []).map((r: any) => <tr key={r.apollo_id} className="hover:bg-gray-50">
-        <td className="px-3 py-2"><input type="checkbox" checked={!!sel[r.apollo_id]} onChange={e => setSel({ ...sel, [r.apollo_id]: e.target.checked })} className="w-4 h-4" /></td>
-        <td className="px-3 py-2 font-medium">{r.name}</td>
-        <td className="px-3 py-2 text-gray-500">{r.title}</td>
-        <td className="px-3 py-2 text-gray-500">{r.company}{r.company_size ? <span className="text-[10px] text-gray-400 ml-1">({r.company_size})</span> : null}</td>
-        <td className="px-3 py-2 text-gray-500 text-xs">{[r.city, r.state, r.country].filter(Boolean).join(", ")}</td>
-        <td className="px-3 py-2"><span className={"px-1.5 py-0.5 rounded text-[10px] font-semibold mr-1 " + (r.has_email ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400")}>@</span><span className={"px-1.5 py-0.5 rounded text-[10px] font-semibold " + (r.has_phone ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400")}>tel</span></td>
-        <td className="px-3 py-2">{r.linkedin_url ? <a href={r.linkedin_url} target="_blank" rel="noreferrer" className="text-blue-600 text-xs hover:underline">in</a> : null}</td>
-      </tr>)}</tbody></table>
-      <div className="flex items-center gap-2 px-3 py-2 border-t text-xs text-gray-500">
-        <button disabled={(res.page || 1) <= 1 || !!busy} onClick={() => run(q, (res.page || 1) - 1)} className="px-2 py-1 border rounded-lg disabled:opacity-40">Prev</button>
-        <span>Page {res.page || 1} of {(res.total_pages || 1).toLocaleString()}</span>
-        <button disabled={(res.page || 1) >= (res.total_pages || 1) || !!busy} onClick={() => run(q, (res.page || 1) + 1)} className="px-2 py-1 border rounded-lg disabled:opacity-40">Next</button>
-        <span className="text-gray-400">Names unblur on import.</span>
-      </div>
-    </div>}
+    </div>
+    <p className="text-[11px] text-gray-400 mt-2">Searching is free. Claude asks before importing, since that spends Apollo credits and reveals real names and emails.</p>
   </div>;
 }
 
