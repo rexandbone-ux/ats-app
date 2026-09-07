@@ -5,51 +5,9 @@ import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Role, Section } fro
 
 type C = { id: string; first_name: string; last_name: string; email?: string; phone?: string; current_title?: string; current_company?: string; status: string; source?: string; city?: string; state?: string; skills?: string[]; experience_years?: number; rating?: number; overall_score?: number; resume_text?: string; screening_responses?: any; application_answers?: any; notes?: string; ai_recommendation?: string; ai_analysis?: any; created_at: string };
 
-const SC: Record<string, string> = { new: "bg-blue-100 text-blue-800", contacted: "bg-yellow-100 text-yellow-800", screening: "bg-indigo-100 text-indigo-800", submitted: "bg-cyan-100 text-cyan-800", interviewing: "bg-purple-100 text-purple-800", offered: "bg-orange-100 text-orange-800", hired: "bg-green-100 text-green-800", placed: "bg-green-100 text-green-800", rejected: "bg-red-100 text-red-800", withdrawn: "bg-gray-100 text-gray-700", on_bench: "bg-sky-100 text-sky-800", blacklisted: "bg-rose-100 text-rose-800", active: "bg-green-100 text-green-800", open: "bg-green-100 text-green-800", on_hold: "bg-yellow-100 text-yellow-800", closed: "bg-gray-100 text-gray-700", draft: "bg-gray-100 text-gray-700", filled: "bg-emerald-100 text-emerald-800", prospect: "bg-blue-100 text-blue-800", churned: "bg-red-100 text-red-700" };
+import { SC, B, Av, Modal, Field, logActivity, MediaLink, Widget } from "@/lib/ui";
+import { Rank } from "./rank";
 const CAND_STATUSES = ["new", "contacted", "screening", "submitted", "interviewing", "offered", "placed", "rejected", "withdrawn", "on_bench", "blacklisted"];
-
-function B({ s }: { s: string }) { return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold capitalize ${SC[s] || "bg-gray-100 text-gray-700"}`}>{(s || "").replace(/_/g, " ")}</span>; }
-function Av({ n, sz = "w-8 h-8 text-xs" }: { n: string; sz?: string }) { return <div className={`${sz} rounded-full bg-blue-50 text-blue-700 flex items-center justify-center font-semibold shrink-0`}>{(n || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}</div>; }
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: any }) {
-  return <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={onClose}><div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}><div className="flex justify-between items-center px-5 py-3 border-b"><h3 className="font-semibold">{title}</h3><button onClick={onClose} className="text-gray-400 text-xl leading-none">&times;</button></div><div className="p-5">{children}</div></div></div>;
-}
-function Field({ label, ...p }: any) { return <label className="block mb-3"><span className="text-xs text-gray-500">{label}</span><input {...p} className="w-full px-3 py-2 border rounded-lg text-sm mt-1" /></label>; }
-async function logActivity(type: string, description: string, refs: { candidate_id?: string; job_id?: string; client_id?: string; application_id?: string }, userId?: string) {
-  try { await supabase.from("activities").insert({ type, description, ...refs, user_id: userId || null }); } catch { /* non-blocking */ }
-}
-function rawDbx(u: string) { return u.replace("www.dropbox.com", "dl.dropboxusercontent.com").replace(/([?&])dl=0/, "$1raw=1"); }
-function embedOf(url: string): { type: string; src: string } | null {
-  if (!url) return null; const u = url.trim();
-  let m = u.match(/voca(?:roo)?\.(?:com|ro)\/(?:embed\/)?([A-Za-z0-9]+)/i);
-  if (m && /voca/i.test(u)) return { type: "audio", src: `https://vocaroo.com/embed/${m[1]}?autoplay=0` };
-  m = u.match(/loom\.com\/(?:share|embed)\/([A-Za-z0-9]+)/i);
-  if (m) return { type: "iframe", src: `https://www.loom.com/embed/${m[1]}` };
-  m = u.match(/(?:youtu\.be\/|youtube\.com\/watch\?v=)([A-Za-z0-9_-]+)/i);
-  if (m) return { type: "iframe", src: `https://www.youtube.com/embed/${m[1]}` };
-  m = u.match(/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)/i);
-  if (m) return { type: "iframe", src: `https://drive.google.com/file/d/${m[1]}/preview` };
-  if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(u)) return { type: "video", src: rawDbx(u) };
-  if (/\.(mp3|wav|ogg|m4a)(\?|$)/i.test(u)) return { type: "audiofile", src: rawDbx(u) };
-  if (/\.pdf(\?|$)/i.test(u)) return { type: "pdf", src: rawDbx(u) };
-  return null;
-}
-function MediaLink({ label, url }: { label: string; url?: string }) {
-  if (!url || !url.trim()) return null;
-  const e = embedOf(url);
-  return <div className="mb-4"><div className="flex items-center justify-between mb-1"><span className="text-xs font-medium text-gray-600">{label}</span><a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">Open ↗</a></div>
-    {e?.type === "audio" && <iframe src={e.src} className="w-full" height="60" frameBorder="0" />}
-    {e?.type === "audiofile" && <audio controls src={e.src} className="w-full" />}
-    {(e?.type === "iframe") && <div className="relative w-full" style={{ paddingBottom: "56%" }}><iframe src={e.src} className="absolute inset-0 w-full h-full rounded-lg border" frameBorder="0" allowFullScreen /></div>}
-    {e?.type === "video" && <video controls src={e.src} className="w-full rounded-lg border max-h-72" />}
-    {e?.type === "pdf" && <iframe src={e.src} className="w-full rounded-lg border" height="420" />}
-    {!e && <a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline break-all">{url}</a>}
-  </div>;
-}
-
-/* ---------------- Dashboard (Zoho-style) ---------------- */
-function Widget({ title, children, info }: { title: string; children: any; info?: string }) {
-  return <div className="bg-white rounded-lg border"><div className="px-4 py-2.5 border-b flex items-center gap-1.5"><h3 className="text-sm font-medium text-gray-700">{title}</h3>{info && <span title={info} className="text-gray-300 text-xs">ⓘ</span>}</div><div className="p-4">{children}</div></div>;
-}
 function Empty() { return <div className="py-10 text-center text-gray-400 text-sm">No records found</div>; }
 function days(from: string, to?: string) { return Math.max(0, Math.round(((to ? new Date(to).getTime() : Date.now()) - new Date(from).getTime()) / 86400000)); }
 function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
@@ -156,13 +114,14 @@ function AddCandidate({ onClose, onSaved }: { onClose: () => void; onSaved: () =
 /* ---------------- Candidate detail ---------------- */
 function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any; editable: boolean }) {
   const { profile } = useAuth();
-  const [c, setC] = useState<any>(null); const [tab, setTab] = useState("overview"); const [apps, setApps] = useState<any[]>([]); const [notes, setNotes] = useState<any[]>([]); const [note, setNote] = useState(""); const [scoring, setScoring] = useState(false); const [tag, setTag] = useState(""); const [emailOpen, setEmailOpen] = useState(false); const [acts, setActs] = useState<any[]>([]); const [recruiters, setRecruiters] = useState<any[]>([]); const [jobsList, setJobsList] = useState<any[]>([]); const [stages, setStages] = useState<any[]>([]); const [addPipe, setAddPipe] = useState(false);
+  const [c, setC] = useState<any>(null); const [tab, setTab] = useState("overview"); const [apps, setApps] = useState<any[]>([]); const [notes, setNotes] = useState<any[]>([]); const [note, setNote] = useState(""); const [scoring, setScoring] = useState(false); const [tag, setTag] = useState(""); const [emailOpen, setEmailOpen] = useState(false); const [acts, setActs] = useState<any[]>([]); const [recruiters, setRecruiters] = useState<any[]>([]); const [jobsList, setJobsList] = useState<any[]>([]); const [stages, setStages] = useState<any[]>([]); const [addPipe, setAddPipe] = useState(false); const [screens, setScreens] = useState<any[]>([]);
   useEffect(() => { supabase.from("profiles").select("id,first_name,last_name,email,role").in("role", ["super_admin", "admin", "recruiter", "hiring_manager"]).then(({ data }) => setRecruiters(data || [])); supabase.from("jobs").select("id,title").order("created_at", { ascending: false }).then(({ data }) => setJobsList(data || [])); supabase.from("pipeline_stages").select("id,name,sort_order").order("sort_order").then(({ data }) => setStages(data || [])); }, []);
   const load = useCallback(async () => {
     const { data } = await supabase.from("candidates").select("*").eq("id", pr.id).single(); setC(data);
     const { data: ap } = await supabase.from("applications").select("id,status,created_at,job_id,offer_amount,offer_date,offer_accepted_at,offer_declined_at,jobs(title)").eq("candidate_id", pr.id); setApps(ap || []);
     const { data: nt } = await supabase.from("notes").select("*").eq("candidate_id", pr.id).order("created_at", { ascending: false }); setNotes(nt || []);
     const { data: ac } = await supabase.from("activities").select("*").eq("candidate_id", pr.id).order("created_at", { ascending: false }).limit(100); setActs(ac || []);
+    const { data: sr } = await supabase.from("v_job_leaderboard").select("job_id,score,tier,verdict,recommended_action_text,summary,screened_at,rank").eq("candidate_id", pr.id).order("score", { ascending: false }); setScreens(sr || []);
   }, [pr.id]);
   useEffect(() => { load(); }, [load]);
   async function setStatus(s: string) { if (!c) return; const prev = c.status; await supabase.from("candidates").update({ status: s }).eq("id", c.id); setC({ ...c, status: s }); logActivity("stage_change", `Status: ${prev} → ${s}`, { candidate_id: c.id }, profile?.id).then(load); }
@@ -194,6 +153,7 @@ function Det({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr: any
       <div className="bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-3">Professional</h3>{[["Title", c.current_title], ["Company", c.current_company], ["Experience", c.experience_years ? `${c.experience_years}yr` : null], ["Source", c.source]].map(([l, v]) => v ? <div key={l as string} className="flex justify-between py-1 border-b border-gray-50 text-xs"><span className="text-gray-400">{l}</span><span className="capitalize">{v as string}</span></div> : null)}</div>
       {(c.resume_url || c.voice_recording_url || c.video_url || c.linkedin_url) && <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-3">Documents &amp; media</h3><div className="grid md:grid-cols-2 gap-x-6"><MediaLink label="Résumé" url={c.resume_url} /><MediaLink label="Voice / video recording" url={c.voice_recording_url} /><MediaLink label="Video" url={c.video_url} />{c.linkedin_url && <MediaLink label="LinkedIn" url={c.linkedin_url} />}</div></div>}
       {c.skills && c.skills.length > 0 && <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">Skills</h3><div className="flex flex-wrap gap-1">{c.skills.map((s: string) => <span key={s} className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full text-[10px]">{s}</span>)}</div></div>}
+      {screens.length > 0 && <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">AI screening ({screens.length})</h3><div className="divide-y divide-gray-50">{screens.map((r: any) => <div key={r.job_id} className="py-2 flex items-start gap-3"><div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${r.score >= 75 ? "bg-green-100 text-green-700" : r.score >= 60 ? "bg-amber-100 text-amber-700" : r.score >= 40 ? "bg-gray-100 text-gray-600" : "bg-red-100 text-red-700"}`}>{r.score ?? "–"}</div><div className="flex-1 min-w-0"><div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-medium">{jobsList.find(j => j.id === r.job_id)?.title || "Job"}</span><span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${r.verdict === "PASS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{r.verdict}</span>{r.tier && <span className="text-[10px] text-gray-500">{r.tier}</span>}{r.rank && <span className="text-[10px] text-gray-400">#{r.rank}</span>}</div><div className="text-xs text-gray-500 truncate" title={r.summary || ""}>{r.summary || r.recommended_action_text || ""}</div></div><button onClick={() => nav("rank", { job_id: r.job_id, candidate_id: c.id })} className="text-xs text-blue-600 hover:underline shrink-0">Rank ↗</button></div>)}</div></div>}
       <div className="md:col-span-2 bg-white rounded-xl border p-4"><h3 className="text-sm font-medium mb-2">Applications &amp; offers ({apps.length})</h3>{apps.length === 0 ? <p className="text-xs text-gray-400">No applications. Use “+ Pipeline” above to add this candidate to a job.</p> : apps.map((a: any) => <div key={a.id} className="py-2 border-b border-gray-50"><div className="flex justify-between items-center"><span className="text-sm">{a.jobs?.title || "Job"}</span><B s={a.status} /></div><div className="flex items-center gap-2 mt-1.5 flex-wrap">{a.offer_accepted_at ? <span className="text-[10px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full">Offer accepted{a.offer_amount ? ` · $${a.offer_amount}` : ""}</span> : a.offer_declined_at ? <span className="text-[10px] px-2 py-0.5 bg-red-100 text-red-700 rounded-full">Offer declined</span> : a.offer_date ? <><span className="text-[10px] px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">Offer out{a.offer_amount ? ` · $${a.offer_amount}` : ""}</span>{editable && <><button onClick={() => offerDecision(a.id, true)} className="text-[10px] px-2 py-0.5 border rounded-lg">Mark accepted</button><button onClick={() => offerDecision(a.id, false)} className="text-[10px] px-2 py-0.5 border rounded-lg">Declined</button></>}</> : (editable && <button onClick={() => recordOffer(a.id)} className="text-[10px] px-2 py-0.5 border rounded-lg">Record offer</button>)}</div></div>)}</div>
     </div>}
     {tab === "responses" && <div className="space-y-4">
@@ -1086,7 +1046,7 @@ function Login() {
 
 /* ---------------- Shell ---------------- */
 const NV: { id: Section; l: string; i: string }[] = [
-  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "sourcing", l: "Sourcing", i: "\u{1F3AF}" }, { id: "outreach", l: "Outreach", i: "\u{1F4E8}" }, { id: "claudesearch", l: "Claude Search", i: "\u{2728}" }, { id: "campaigns", l: "Campaigns", i: "\u{1F916}" }, { id: "settings", l: "Settings", i: "⚙️" }];
+  { id: "dash", l: "Dashboard", i: "\u{1F4CA}" }, { id: "cands", l: "Candidates", i: "\u{1F465}" }, { id: "pipeline", l: "Pipeline", i: "\u{1F4CB}" }, { id: "rank", l: "Rank", i: "\u{1F3C6}" }, { id: "jobs", l: "Positions", i: "\u{1F4BC}" }, { id: "clients", l: "Clients", i: "\u{1F3E2}" }, { id: "placements", l: "Placements", i: "\u{1F91D}" }, { id: "pools", l: "Talent Pools", i: "\u{2B50}" }, { id: "interviews", l: "Interviews", i: "\u{1F5D3}" }, { id: "tasks", l: "Tasks", i: "✅" }, { id: "reports", l: "Reports", i: "\u{1F4C8}" }, { id: "search", l: "AI Search", i: "\u{1F50D}" }, { id: "sourcing", l: "Sourcing", i: "\u{1F3AF}" }, { id: "outreach", l: "Outreach", i: "\u{1F4E8}" }, { id: "claudesearch", l: "Claude Search", i: "\u{2728}" }, { id: "campaigns", l: "Campaigns", i: "\u{1F916}" }, { id: "settings", l: "Settings", i: "⚙️" }];
 
 export default function Home() {
   const { profile, loading, signOut } = useAuth();
@@ -1106,6 +1066,7 @@ export default function Home() {
       case "cands": return allowed("cands") ? <Cands nav={nav} editable={editable} /> : <Denied />;
       case "det": return allowed("cands") ? <Det nav={nav} pr={pr} editable={editable} /> : <Denied />;
       case "pipeline": return allowed("pipeline") ? <Pipeline nav={nav} editable={editable} /> : <Denied />;
+      case "rank": return allowed("rank") ? <Rank nav={nav} pr={pr} editable={editable} /> : <Denied />;
       case "jobs": return allowed("jobs") ? <Jobs nav={nav} editable={editable} /> : <Denied />;
       case "job": return allowed("jobs") ? <JobDetail nav={nav} pr={pr} editable={editable} /> : <Denied />;
       case "clients": return allowed("clients") ? <Clients nav={nav} editable={editable} /> : <Denied />;
