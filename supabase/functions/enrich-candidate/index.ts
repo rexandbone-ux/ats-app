@@ -77,8 +77,12 @@ const now = () => new Date().toISOString();
 const head = (s: unknown, n = 160) => String(s ?? "").replace(/\s+/g, " ").slice(0, n);
 const isHttp = (s: string) => /^https?:\/\//i.test((s || "").trim());
 
-// ---------- Anthropic (graceful: once it fails hard, stop calling for this invocation) ----------
+// ---------- Provider availability (per invocation). When a provider is out of credits / rate-limited / down,
+// the affected rows are recorded as status "skipped" kind "pending-credits" so they re-enter the queue immediately
+// (no 7-day backoff), and the rest of the run short-circuits that provider.
 let anthropicDown = "";
+let openaiDown = "";
+const PENDING_RE = /credit|billing|balance|quota|insufficient|rate.?limit|overloaded|too many|invalid.*key|authentication|unauthorized/i;
 async function claude(apiKey: string, system: string, content: any[], maxTokens = 6000): Promise<any> {
   if (!apiKey) throw new Error("anthropic unavailable: no key");
   if (anthropicDown) throw new Error(`anthropic unavailable: ${anthropicDown}`);
@@ -92,7 +96,7 @@ async function claude(apiKey: string, system: string, content: any[], maxTokens 
     let detail = head(raw, 200);
     try { detail = JSON.parse(raw)?.error?.message || detail; } catch { /* keep raw */ }
     const msg = `Anthropic ${res.status}: ${head(detail, 140)}`;
-    if ([400, 401, 402, 403, 429, 529].includes(res.status) && /credit|billing|balance|invalid.*key|authentication|overloaded|rate/i.test(raw)) anthropicDown = msg;
+    if ([401, 402, 403, 429, 529].includes(res.status) || res.status >= 500 || (res.status === 400 && PENDING_RE.test(raw))) anthropicDown = msg;
     throw new Error(msg);
   }
   const data = JSON.parse(raw);
@@ -365,7 +369,7 @@ async function resolveResume(rawUrl: string, depth = 0): Promise<Resolved> {
 }
 
 // ---------- Extraction ----------
-type Extracted = { text: string; kind: string; parsed: any | null; note: string };
+type Extracted = { text: string; kind: string; parsed: any | null; note: string; pending?: boolean };
 
 async function extractFromFetched(r: Resolved, apiKey: string): Promise<Extracted> {
   const f = r.fetched!;
@@ -400,7 +404,7 @@ async function extractFromFetched(r: Resolved, apiKey: string): Promise<Extracte
       if (t.length >= 100) return { text: t, kind: `${r.kind}/pdf-vision`, parsed: p, note: notes.join("; ") };
       return { text: "", kind: outKind, parsed: null, note: [...notes, "pdf yielded no text (empty or image-only)"].join("; ") };
     } catch (e) {
-      return { text: "", kind: outKind, parsed: null, note: [...notes, `pdf has no text layer (${text.length} chars) and vision failed: ${head(e, 120)}`].join("; ") };
+      return { text: "", kind: outKind, parsed: null, pending: !!anthropicDown, note: [...notes, `pdf has no text layer (${text.length} chars); vision ${anthropicDown ? "pending credits" : "failed"}: ${head(e, 120)}`].join("; ") };
     }
   }
   if (kind === "docx" || kind === "zip") {
@@ -416,7 +420,7 @@ async function extractFromFetched(r: Resolved, apiKey: string): Promise<Extracte
       const t = String(p?.text || "");
       if (t.length >= 100) return { text: t, kind: outKind, parsed: p, note: "" };
       return { text: "", kind: outKind, parsed: null, note: "image contained no readable resume text" };
-    } catch (e) { return { text: "", kind: outKind, parsed: null, note: `image needs vision: ${head(e, 120)}` }; }
+    } catch (e) { return { text: "", kind: outKind, parsed: null, pending: !!anthropicDown, note: `image needs vision (${anthropicDown ? "pending credits" : "failed"}): ${head(e, 120)}` }; }
   }
   if (kind === "rtf") {
     text = rtfToText(new TextDecoder().decode(f.buf));
@@ -468,6 +472,12 @@ async function enrichResume(cand: any, apiKey: string): Promise<any> {
     }
     const x = await extractFromFetched(r, apiKey);
     if (!x.text || x.text.length < 200) {
+      if (x.pending) {
+        // Needs Claude vision and Anthropic is out of credits / down: keep it in the queue, no backoff, no error log.
+        rec = { status: "skipped", kind: "pending-credits", source_url: r.url.slice(0, 500), note: `${x.kind}: ${x.note}`, at: now(), chars: 0 };
+        await saveEnrich(cand, "resume", rec);
+        return rec;
+      }
       rec = { status: "failed", kind: x.kind, source_url: r.url.slice(0, 500), note: x.note || "no text extracted", at: now(), chars: x.text?.length || 0 };
       await saveEnrich(cand, "resume", rec);
       await logError(cand, "resume", rec.note, { kind: x.kind, url: raw.slice(0, 300) });
@@ -568,7 +578,8 @@ async function resolveMedia(rawUrl: string): Promise<Media> {
   return { kind: "unsupported", url, note: `unsupported media host (${host})` };
 }
 
-async function whisper(openaiKey: string, f: Fetched): Promise<{ text: string; note: string }> {
+async function whisper(openaiKey: string, f: Fetched): Promise<{ text: string; note: string; pending?: boolean }> {
+  if (openaiDown) return { text: "", note: `whisper unavailable: ${openaiDown}`, pending: true };
   if (f.buf.length > 24 * 1024 * 1024) return { text: "", note: "media too large for Whisper (>24MB)" };
   const ct = f.ct.split(";")[0] || "";
   const ext = ct.includes("mp4") || /\.mp4(\?|$)/i.test(f.url) ? "mp4" : ct.includes("webm") || /\.webm(\?|$)/i.test(f.url) ? "webm" : ct.includes("wav") ? "wav" : ct.includes("ogg") ? "ogg" : ct.includes("m4a") || ct.includes("x-m4a") ? "m4a" : "mp3";
@@ -578,7 +589,12 @@ async function whisper(openaiKey: string, f: Fetched): Promise<{ text: string; n
   fd.append("response_format", "json");
   const tr = await fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", headers: { Authorization: `Bearer ${openaiKey}` }, body: fd });
   const body = await tr.json().catch(() => ({}));
-  if (!tr.ok) return { text: "", note: `whisper ${tr.status}: ${head(JSON.stringify(body), 150)}` };
+  if (!tr.ok) {
+    const detail = String(body?.error?.message || JSON.stringify(body));
+    const msg = `whisper ${tr.status}: ${head(detail, 140)}`;
+    if ([401, 402, 403, 429].includes(tr.status) || tr.status >= 500 || PENDING_RE.test(detail)) { openaiDown = msg; return { text: "", note: msg, pending: true }; }
+    return { text: "", note: msg };
+  }
   return { text: String(body.text || "").trim(), note: "" };
 }
 
@@ -601,9 +617,11 @@ async function enrichTranscript(cand: any, openaiKey: string): Promise<any> {
     }
   }
   try {
-    // Without a Whisper key, don't download media at all (only Loom pages may carry a free transcript).
-    if (!openaiKey && !/loom\.com/i.test(raw)) {
-      rec = { status: "skipped", kind: "pending-key", note: "no transcription key (add app_secrets.openai_api_key)", at: now(), chars: 0 };
+    // Without a usable Whisper key, don't download media at all (only Loom pages may carry a free transcript).
+    if ((!openaiKey || openaiDown) && !/loom\.com/i.test(raw)) {
+      rec = openaiDown
+        ? { status: "skipped", kind: "pending-credits", note: `transcription unavailable: ${openaiDown}`, at: now(), chars: 0 }
+        : { status: "skipped", kind: "pending-key", note: "no transcription key (add app_secrets.openai_api_key)", at: now(), chars: 0 };
       await saveEnrich(cand, "transcript", rec);
       return rec;
     }
@@ -627,6 +645,11 @@ async function enrichTranscript(cand: any, openaiKey: string): Promise<any> {
       return rec;
     }
     const w = await whisper(openaiKey, m.fetched);
+    if (w.pending) {
+      rec = { status: "skipped", kind: "pending-credits", media_kind: m.kind, note: w.note, at: now(), chars: 0 };
+      await saveEnrich(cand, "transcript", rec);
+      return rec;
+    }
     if (!w.text || w.text.length < 5) {
       rec = { status: "failed", kind: m.kind, note: w.note || "empty transcript", at: now(), chars: 0 };
       await saveEnrich(cand, "transcript", rec);
@@ -681,10 +704,23 @@ Deno.serve(async (req: Request) => {
       const errs = (await sb(`activities?type=eq.enrich_error&order=created_at.desc&limit=20&select=created_at,candidate_id,description,metadata`)) as any[];
       const byNote: Record<string, number> = {};
       for (const e of errs || []) { const k = String(e.description || "").replace(/^Enrichment \((\w+)\) failed: /, "$1: ").slice(0, 70); byNote[k] = (byNote[k] || 0) + 1; }
+      const lastNote = async (part: string) => {
+        try {
+          const rows = (await sb(`candidates?select=id,custom_fields->enrich->${part}&custom_fields->enrich->${part}->>status=neq.ok&custom_fields->enrich->${part}->>at=not.is.null&order=custom_fields->enrich->${part}->>at.desc&limit=1`)) as any[];
+          const t = rows?.[0]?.[part]; return t ? { candidate_id: rows[0].id, status: t.status, kind: t.kind, note: t.note, at: t.at } : null;
+        } catch { return null; }
+      };
+      const [lastTranscript, lastResume, pendingCreditsT, pendingCreditsR] = await Promise.all([
+        lastNote("transcript"), lastNote("resume"),
+        q(`candidates?select=count&custom_fields->enrich->transcript->>kind=eq.pending-credits`),
+        q(`candidates?select=count&custom_fields->enrich->resume->>kind=eq.pending-credits`),
+      ]);
       return json({
         ok: true, model: MODEL, anthropic_key: !!apiKey, openai_key: !!openaiKey,
         candidates: total, with_resume_url: withUrl, with_resume_text: withText, with_media: withMedia, transcribed,
         pending_resume: pendResume, pending_transcript: pendTranscript, resume_ok: okResume, resume_failed: failedResume,
+        pending_credits: { transcript: pendingCreditsT, resume: pendingCreditsR },
+        last_transcript_error: lastTranscript, last_resume_error: lastResume,
         recent_errors: Object.entries(byNote).map(([note, n]) => ({ note, n })),
         note: openaiKey ? "" : "Transcription skipped until app_secrets.openai_api_key exists (skipped items stay pending).",
       });
@@ -713,7 +749,7 @@ Deno.serve(async (req: Request) => {
       const rows = (await sb(`candidates?id=eq.${body.candidate_id}&select=${CAND_COLS}`)) as any[];
       if (!rows?.length) return json({ error: "candidate not found" }, 404);
       const r = await enrichOne(rows[0], what, apiKey, openaiKey);
-      return json({ ok: true, ...r, anthropic_down: anthropicDown || null });
+      return json({ ok: true, ...r, anthropic_down: anthropicDown || null, openai_down: openaiDown || null });
     }
 
     if (action === "run") {
@@ -722,19 +758,21 @@ Deno.serve(async (req: Request) => {
       // Without a Whisper key, transcript-only candidates would be re-picked forever; restrict the queue to resumes.
       const effWhat = !openaiKey && what !== "resume" ? (what === "transcript" ? "none" : "resume") : what;
       if (effWhat === "none") return json({ ok: true, processed: 0, results: [], note: "transcription needs app_secrets.openai_api_key" });
-      const need = effWhat === "resume" ? "needs_resume=eq.true" : effWhat === "transcript" ? "needs_transcript=eq.true" : "or=(needs_resume.eq.true,needs_transcript.eq.true)";
-      let ids: string[] = [];
+      // For "both", pick `limit` resume rows AND `limit` transcript rows (deduped) so resumes keep flowing
+      // even while transcription is unavailable and transcript rows dominate the queue.
+      const needs = effWhat === "resume" ? ["needs_resume=eq.true"] : effWhat === "transcript" ? ["needs_transcript=eq.true"] : ["needs_resume=eq.true", "needs_transcript=eq.true"];
+      const ids: string[] = [];
+      const add = (rows: any[], cap: number) => { let n = 0; for (const r of rows || []) { if (n >= cap) break; if (!ids.includes(r.id)) { ids.push(r.id); n++; } } };
+      let pids: string[] = [];
       if (body.priority) {
         const apps = (await sb(`applications?job_id=eq.${body.priority}&select=candidate_id&limit=500`)) as any[];
-        const pids = [...new Set((apps || []).map((a) => a.candidate_id).filter(Boolean))];
-        if (pids.length) {
-          const rows = (await sb(`v_enrich_queue?${need}&id=in.(${pids.slice(0, 300).join(",")})&order=created_at.desc&limit=${limit}&select=id`)) as any[];
-          ids = (rows || []).map((r) => r.id);
-        }
+        pids = [...new Set((apps || []).map((a) => a.candidate_id).filter(Boolean))].slice(0, 300) as string[];
       }
-      if (ids.length < limit) {
-        const rows = (await sb(`v_enrich_queue?${need}&order=on_open_job.desc,created_at.desc&limit=${limit + ids.length}&select=id,on_open_job,needs_resume,needs_transcript`)) as any[];
-        for (const r of rows || []) { if (ids.length >= limit) break; if (!ids.includes(r.id)) ids.push(r.id); }
+      for (const need of needs) {
+        const before = ids.length;
+        if (pids.length) add((await sb(`v_enrich_queue?${need}&id=in.(${pids.join(",")})&order=created_at.desc&limit=${limit}&select=id`)) as any[], limit);
+        const got = ids.length - before;
+        if (got < limit) add((await sb(`v_enrich_queue?${need}&order=on_open_job.desc,created_at.desc&limit=${limit * 2}&select=id`)) as any[], limit - got);
       }
       if (!ids.length) return json({ ok: true, processed: 0, results: [], note: "queue empty" });
       const cands = (await sb(`candidates?id=in.(${ids.join(",")})&select=${CAND_COLS}`)) as any[];
@@ -752,7 +790,7 @@ Deno.serve(async (req: Request) => {
         ok: true, processed: results.filter((r) => r.candidate_id).length,
         resumes_ok: results.filter((r) => r.resume?.status === "ok").length,
         transcripts_ok: results.filter((r) => r.transcript?.status === "ok").length,
-        elapsed_ms: Date.now() - started, anthropic_down: anthropicDown || null, results,
+        elapsed_ms: Date.now() - started, anthropic_down: anthropicDown || null, openai_down: openaiDown || null, results,
       });
     }
 
