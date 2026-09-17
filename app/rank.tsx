@@ -2,7 +2,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
-import { B, Av, Modal, Field, logActivity, MediaLink } from "@/lib/ui";
+import { B, Av, Modal, Field, logActivity, MediaLink, fn } from "@/lib/ui";
+import { callCandidate, smsCandidate } from "@/lib/comms";
 
 /* ---------------- Rank (AI screening leaderboard) ---------------- */
 const POOL = "General Applicant Pool";
@@ -19,13 +20,7 @@ function ScoreBar({ score, ko, w = "w-20" }: { score: number | null; ko?: boolea
   return <div className="flex items-center gap-2"><span className={`text-sm font-semibold w-7 text-right ${scoreText(score)}`}>{score ?? "–"}</span><div className={`${w} h-1.5 rounded-full bg-gray-100 overflow-hidden ${ko ? "ring-1 ring-red-400" : ""}`}><div className={`h-full ${scoreCls(score)}`} style={{ width: `${Math.max(0, Math.min(100, score || 0))}%` }} /></div></div>;
 }
 
-async function callAgent(body: any) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const r = await fetch(`${SUPABASE_URL}/functions/v1/screening-agent`, { method: "POST", headers: { Authorization: `Bearer ${session?.access_token || SUPABASE_ANON_KEY}`, apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const text = await r.text(); let j: any = null; try { j = JSON.parse(text); } catch { /* not json */ }
-  if (!r.ok || j?.ok === false || j?.error) throw new Error(j?.error || j?.message || (typeof j?.detail === "string" ? j.detail : "") || text.slice(0, 300) || `HTTP ${r.status}`);
-  return j;
-}
+export async function callAgent(body: any) { return fn("screening-agent", body, { timeoutMs: 300000 }); }
 
 export function Rank({ nav, pr, editable }: { nav: (p: string, d?: any) => void; pr?: any; editable: boolean }) {
   const { profile } = useAuth();
@@ -107,7 +102,7 @@ export function Rank({ nav, pr, editable }: { nav: (p: string, d?: any) => void;
 
 /* ---------------- Candidate audit drawer ---------------- */
 function Sec({ t, children }: { t: string; children: any }) { return <div className="mb-4"><h4 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">{t}</h4>{children}</div>; }
-function Audit({ row, job, jobStages, recs, recMap, editable, profileId, onClose, onChanged, say, nav }: { row: any; job: any; jobStages: any[]; recs: any[]; recMap: Record<string, string>; editable: boolean; profileId?: string; onClose: () => void; onChanged: () => Promise<void>; say: (t: string, ok?: boolean) => void; nav: (p: string, d?: any) => void }) {
+export function Audit({ row, job, jobStages, recs, recMap, editable, profileId, onClose, onChanged, say, nav }: { row: any; job: any; jobStages: any[]; recs: any[]; recMap: Record<string, string>; editable: boolean; profileId?: string; onClose: () => void; onChanged: () => Promise<void>; say: (t: string, ok?: boolean) => void; nav: (p: string, d?: any) => void }) {
   const [c, setC] = useState<any>(null); const [hist, setHist] = useState<any[]>([]); const [app, setApp] = useState<any>(null); const [busy, setBusy] = useState(""); const [err, setErr] = useState(""); const [vis, setVis] = useState(false);
   useEffect(() => { const t = setTimeout(() => setVis(true), 10); return () => clearTimeout(t); }, []);
   const load = useCallback(async () => {
@@ -169,6 +164,7 @@ function Audit({ row, job, jobStages, recs, recMap, editable, profileId, onClose
         {(c?.adam_rating != null || c?.roe_rating != null || engRate != null || cefr) && <Sec t="Human ratings"><div className="flex gap-3 text-xs flex-wrap">{c?.adam_rating != null && <span>Adam <b>{c.adam_rating}</b></span>}{c?.roe_rating != null && <span>Roe <b>{c.roe_rating}</b></span>}{engRate != null && <span>English rate <b>{engRate}</b></span>}{cefr && <span>CEFR <b>{cefr}</b></span>}</div></Sec>}
         {editable && <div className="border-t pt-3 mt-2"><div className="text-[10px] text-gray-400 mb-2">{app ? <>Application: <B s={app.status} /> · {stageOf(app.stage_id)?.name || jobStages[0]?.name || "—"}{app.submitted_to_client_at ? ` · submitted ${ago(app.submitted_to_client_at)}` : ""}</> : "Not in this job's pipeline yet."}</div>
           <div className="flex gap-1.5 flex-wrap"><button disabled={!!busy} onClick={rescreen} className="text-xs px-2.5 py-1.5 border rounded-lg disabled:opacity-50">{busy === "screen" ? "Screening…" : "✦ Re-screen"}</button><button disabled={!!busy || app?.status === "rejected"} onClick={advance} className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 text-white disabled:opacity-50">{busy === "advance" ? "…" : app ? "Advance to next stage" : "Add to pipeline"}</button><button disabled={!!busy || app?.status === "rejected"} onClick={submit} className="text-xs px-2.5 py-1.5 border rounded-lg disabled:opacity-50">{busy === "submit" ? "…" : "Submit to client"}</button><button disabled={!!busy || app?.status === "rejected"} onClick={decline} className="text-xs px-2.5 py-1.5 border border-red-200 text-red-600 rounded-lg disabled:opacity-50">{busy === "decline" ? "…" : "Decline"}</button><select disabled={!!busy} value={c?.owner_id || ""} onChange={e => assign(e.target.value)} className="text-xs px-2 py-1.5 border rounded-lg"><option value="">Assign to…</option>{recs.map(p => <option key={p.id} value={p.id}>{p.first_name || p.email}</option>)}</select></div>
+          <div className="flex gap-1.5 flex-wrap mt-2"><button disabled={!c?.phone} onClick={() => callCandidate(c, say)} className="text-xs px-2.5 py-1.5 border rounded-lg disabled:opacity-40">☎ Call{c?.phone ? "" : " (no phone)"}</button><button disabled={!c?.phone} onClick={() => smsCandidate(c, say)} className="text-xs px-2.5 py-1.5 border rounded-lg disabled:opacity-40">💬 Text</button><button onClick={() => nav("det", { id: row.candidate_id, email: true })} className="text-xs px-2.5 py-1.5 border rounded-lg">✉ Email</button>{Array.isArray(r.interview_questions) && r.interview_questions.length > 0 && <button onClick={() => { navigator.clipboard?.writeText(r.interview_questions.map((q: string, i: number) => `${i + 1}. ${q}`).join("\n")); say("Interview questions copied."); }} className="text-xs px-2.5 py-1.5 border rounded-lg">📋 Copy interview kit</button>}</div>
           {err && <p className="text-xs text-red-600 mt-2 whitespace-pre-wrap">{err}</p>}</div>}
       </div>
     </div>
@@ -177,7 +173,7 @@ function Audit({ row, job, jobStages, recs, recMap, editable, profileId, onClose
 
 /* ---------------- Edit brief modal ---------------- */
 function List({ label, items, set, p }: { label: string; items: any[]; set: (v: any[]) => void; p: string }) { return <div className="mb-3"><div className="text-xs text-gray-500 mb-1">{label} ({items.length})</div>{items.map((it, i) => <div key={i} className="flex gap-1 mb-1"><input value={it.text} onChange={e => set(items.map((x, j) => j === i ? { ...x, text: e.target.value } : x))} className="flex-1 px-2 py-1 border rounded text-xs" /><button onClick={() => set(items.filter((_, j) => j !== i))} className="text-gray-300 hover:text-red-500 text-xs px-1">×</button></div>)}<button onClick={() => set([...items, { id: `${p}${items.length + 1}`, text: "" }])} className="text-[11px] text-blue-600 hover:underline">+ add</button></div>; }
-function BriefModal({ job, onClose, onSaved }: { job: any; onClose: () => void; onSaved: (regen: boolean) => void }) {
+export function BriefModal({ job, onClose, onSaved }: { job: any; onClose: () => void; onSaved: (regen: boolean) => void }) {
   const rub = job?.custom_fields?.screening_rubric || {};
   const norm = (a: any, p: string) => (Array.isArray(a) ? a : []).map((x: any, i: number) => ({ id: x?.id || `${p}${i + 1}`, text: typeof x === "string" ? x : (x?.text || "") }));
   const [desc, setDesc] = useState(job?.description || ""); const [req, setReq] = useState(job?.requirements || ""); const [must, setMust] = useState<any[]>(norm(rub.must_haves, "m")); const [nice, setNice] = useState<any[]>(norm(rub.nice_to_haves, "n")); const [ko, setKo] = useState<any[]>(norm(rub.knockouts, "k")); const [eng, setEng] = useState(rub.target_english || ""); const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [saved, setSaved] = useState(false);
