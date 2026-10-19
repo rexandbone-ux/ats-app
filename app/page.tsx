@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Section } from "@/lib/auth";
-import { Av, ToastProvider, fullName } from "@/lib/ui";
+import { Av, ToastProvider, fullName, pgq } from "@/lib/ui";
 import { Rank } from "./rank";
 import { Dash } from "@/components/dashboard";
 import { Search } from "@/components/search";
@@ -25,7 +25,7 @@ import { Login } from "@/components/login";
 type NavItem = { id: Section; l: string; i: string };
 const GROUPS: { t: string; items: NavItem[] }[] = [
   { t: "Work", items: [{ id: "dash", l: "Dashboard", i: "▦" }, { id: "search", l: "Search", i: "⌕" }, { id: "jobs", l: "Jobs", i: "◧" }, { id: "cands", l: "Candidates", i: "◉" }, { id: "pipeline", l: "Pipeline", i: "⇶" }, { id: "rank", l: "Rank", i: "★" }, { id: "interviews", l: "Interviews", i: "▤" }, { id: "tasks", l: "Tasks", i: "✓" }] },
-  { t: "Grow", items: [{ id: "sourcing", l: "Sourcing (Apollo)", i: "◎" }, { id: "claudesearch", l: "Claude Search", i: "✦" }, { id: "campaigns", l: "Campaigns", i: "➤" }] },
+  { t: "Grow", items: [{ id: "sourcing", l: "Sourcing (Apollo)", i: "◎" }, { id: "claudesearch", l: "Claude Search", i: "✦" }, { id: "campaigns", l: "Agents", i: "➤" }] },
   { t: "Manage", items: [{ id: "clients", l: "Clients", i: "▣" }, { id: "placements", l: "Placements", i: "◆" }, { id: "pools", l: "Talent pools", i: "❖" }, { id: "reports", l: "Reports", i: "▥" }, { id: "settings", l: "Settings", i: "⚙" }] },
 ];
 const PARENT: Record<string, string> = { det: "cands", job: "jobs", client: "clients", pool: "pools" };
@@ -40,7 +40,7 @@ export default function Home() {
   const nav = useCallback((p: string, d: any = {}) => { setPg(p); setPr(d); setGq(""); setGres([]); writeHash(p, d); window.scrollTo({ top: 0 }); }, []);
   useEffect(() => { const h = readHash(); setPg(h.pg); setPr(h.pr); setReady(true); const on = () => { const x = readHash(); setPg(x.pg); setPr(x.pr); }; window.addEventListener("popstate", on); return () => window.removeEventListener("popstate", on); }, []);
   useEffect(() => { try { const s = localStorage.getItem("ss_side"); if (s === "0") setSide(false); } catch { /* */ } }, []);
-  useEffect(() => { if (gq.trim().length < 2) { setGres([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name,current_title,email").or(`first_name.ilike.%${gq}%,last_name.ilike.%${gq}%,email.ilike.%${gq}%,current_title.ilike.%${gq}%,phone.ilike.%${gq}%`).limit(7); setGres(data || []); }, 200); return () => clearTimeout(t); }, [gq]);
+  useEffect(() => { if (gq.trim().length < 2) { setGres([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name,current_title,email").or(`first_name.ilike.%${pgq(gq)}%,last_name.ilike.%${pgq(gq)}%,email.ilike.%${pgq(gq)}%,current_title.ilike.%${pgq(gq)}%,phone.ilike.%${pgq(gq)}%`).limit(7); setGres(data || []); }, 200); return () => clearTimeout(t); }, [gq]);
   if (loading || !ready) return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>;
   if (!profile) return <Login />;
   if (profile.role === "client_user") return <ClientPortal />;

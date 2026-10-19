@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from "@/lib/supabase";
 import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Role, Section } from "@/lib/auth";
-import { SC, B, Av, Modal, Field, logActivity, MediaLink, Widget, Empty, days, CAND_STATUSES, C, fn, Toast, useToast, Chip, Score, exportCsv, TextArea, Select } from "@/lib/ui";
+import { SC, B, Av, Modal, Field, logActivity, MediaLink, Widget, Empty, days, CAND_STATUSES, C, fn, Toast, useToast, Chip, Score, exportCsv, TextArea, Select, pgq } from "@/lib/ui";
 
 /* ---------------- Placements ---------------- */
 export function Placements({ nav, editable }: { nav: (p: string, d?: any) => void; editable: boolean }) {
@@ -22,7 +22,7 @@ export function RecordPlacement({ onClose, onSaved }: { onClose: () => void; onS
   const [q, setQ] = useState(""); const [opts, setOpts] = useState<any[]>([]); const [clients, setClients] = useState<any[]>([]); const [jobs, setJobs] = useState<any[]>([]);
   const [f, setF] = useState<any>({ candidate_id: "", candidate_name: "", client_id: "", job_id: "", candidate_pay_rate: "", client_bill_rate: "", pay_period: "hour", start_date: "" }); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   useEffect(() => { supabase.from("clients").select("id,company_name").order("company_name").then(({ data }) => setClients(data || [])); supabase.from("jobs").select("id,title").order("created_at", { ascending: false }).then(({ data }) => setJobs(data || [])); }, []);
-  useEffect(() => { if (q.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${q}%,last_name.ilike.%${q}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
+  useEffect(() => { if (q.length < 2) { setOpts([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name").or(`first_name.ilike.%${pgq(q)}%,last_name.ilike.%${pgq(q)}%`).limit(6); setOpts(data || []); }, 250); return () => clearTimeout(t); }, [q]);
   async function save() {
     if (!f.candidate_id || !f.client_id) { setErr("Pick a candidate and a client"); return; }
     setBusy(true);

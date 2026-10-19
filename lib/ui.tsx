@@ -9,6 +9,8 @@ export const SC: Record<string, string> = { new: "bg-blue-100 text-blue-800", co
 
 export function days(from: string, to?: string) { return Math.max(0, Math.round(((to ? new Date(to).getTime() : Date.now()) - new Date(from).getTime()) / 86400000)); }
 export function ago(d?: string) { if (!d) return "—"; const m = Math.round((Date.now() - new Date(d).getTime()) / 60000); if (m < 1) return "just now"; if (m < 60) return `${m}m ago`; const h = Math.round(m / 60); if (h < 24) return `${h}h ago`; const dd = Math.round(h / 24); if (dd < 30) return `${dd}d ago`; return new Date(d).toLocaleDateString(); }
+/** Make free text safe inside a PostgREST .or()/.ilike filter string (strips , ( ) " \ * % so input cannot add filters). */
+export function pgq(s: string) { return String(s || "").replace(/[,()"\\*%]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80); }
 export function fullName(c: any) { return `${c?.first_name || ""} ${c?.last_name || ""}`.trim() || c?.email || "?"; }
 export function e164(p?: string) { if (!p) return ""; let d = String(p).replace(/[^0-9+]/g, ""); if (!d.startsWith("+")) { if (d.length === 10) d = "+1" + d; else if (d.length === 11 && d.startsWith("1")) d = "+" + d; else d = "+" + d; } return d; }
 
