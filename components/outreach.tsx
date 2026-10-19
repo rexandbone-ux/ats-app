@@ -50,9 +50,10 @@ export function AIOutreachModal({ cands, onClose, onDone, jobId }: { cands: any[
   const picked = (drafts || []).filter(d => on[d.id] && !res[d.id]?.ok).length;
 
   return <Modal title={drafts ? `Review ${drafts.length} personalized email${drafts.length === 1 ? "" : "s"}` : `AI emails for ${cands.length} ${cands.length === 1 ? "person" : "people"}`} onClose={onClose} wide>
-    {st && <div className={"text-[11px] px-3 py-2 rounded-lg mb-3 " + (st.gmail_connected ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800")}>
-      {st.gmail_connected ? <>Sends from your Gmail: <b>{st.gmail}</b>. Replies land in your inbox and sync to the candidate timeline.</>
-        : <>Your Gmail isn't connected, so emails can't send from the ATS yet. <a href="#/settings" onClick={onClose} className="underline font-medium">Connect it in Settings → Integrations</a>. Until then each draft has an "Open in Gmail" button.</>}
+    {st && <div className={"text-[11px] px-3 py-2 rounded-lg mb-3 " + (st.channel ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800")}>
+      {st.channel === "gmail" ? <>Sends from your Gmail: <b>{st.from}</b>. Replies land in your inbox and sync to the candidate timeline.</>
+        : st.channel === "apollo" ? <>Sends through Apollo from <b>{st.from}</b> ({st.sent_today || 0}/{st.daily_cap} sent today). Replies land in that inbox and in Apollo.</>
+        : <>No mailbox is connected, so emails can't send from the ATS yet. <a href="#/settings" onClick={onClose} className="underline font-medium">Connect Gmail in Settings → Integrations</a>. Until then each draft has an "Open in Gmail" button.</>}
     </div>}
     {err && <div className="text-xs px-3 py-2 rounded-lg bg-red-50 text-red-600 mb-3">{err}</div>}
 
@@ -84,13 +85,13 @@ export function AIOutreachModal({ cands, onClose, onDone, jobId }: { cands: any[
           <input value={d.subject} disabled={!!r?.ok} onChange={e => edit(d.id, { subject: e.target.value })} onBlur={() => save(d)} className="w-full px-2.5 py-1.5 border rounded-lg text-sm font-medium mb-1.5" />
           <textarea value={d.body} disabled={!!r?.ok} onChange={e => edit(d.id, { body: e.target.value })} onBlur={() => save(d)} rows={Math.min(12, d.body.split("\n").length + 2)} className="w-full px-2.5 py-1.5 border rounded-lg text-sm leading-relaxed" />
           {r && !r.ok && <div className="text-[11px] text-red-600 mt-1">Not sent: {r.error}</div>}
-          {!r?.ok && !st?.gmail_connected && <a href={gmailLink(d)} target="_blank" rel="noreferrer" className="inline-block mt-1.5 text-xs px-2.5 py-1 border rounded-lg hover:bg-gray-50">Open in Gmail ↗</a>}
+          {!r?.ok && !st?.channel && <a href={gmailLink(d)} target="_blank" rel="noreferrer" className="inline-block mt-1.5 text-xs px-2.5 py-1 border rounded-lg hover:bg-gray-50">Open in Gmail ↗</a>}
         </div>;
       })}</div>
       <div className="flex justify-between items-center gap-2 sticky bottom-0 bg-white pt-2">
         <button onClick={() => { setDrafts(null); setRes({}); }} className="text-xs text-gray-500 hover:underline">← Rewrite with different instructions</button>
         <div className="flex gap-2"><Btn onClick={onClose}>Close</Btn>
-          <Btn primary disabled={!!busy || !picked || !st?.gmail_connected} onClick={send} title={st?.gmail_connected ? "" : "Connect Gmail in Settings first"}>{busy === "send" ? "Sending…" : `Send ${picked} from Gmail`}</Btn></div>
+          <Btn primary disabled={!!busy || !picked || !st?.channel} onClick={send} title={st?.channel ? "" : "Connect a mailbox first"}>{busy === "send" ? "Sending…" : `Send ${picked} from ${st?.from || "Gmail"}`}</Btn></div>
       </div>
     </div>}
   </Modal>;
