@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { B, Av, Modal, Field, logActivity, fn, useToast, Chip, Pct, Btn, exportCsv, fullName, scoreText, Empty, pgq } from "@/lib/ui";
 import { callCandidate, smsCandidate, pushToClose, openInClose } from "@/lib/comms";
 import { SequenceModal } from "@/components/sequence";
+import { AIOutreachModal } from "@/components/outreach";
 
 /* ---------------- Search (Juicebox / PeopleGPT style) ----------------
    One box. Plain English in, ranked people out — from your own ATS first
@@ -120,7 +121,7 @@ export function Search({ nav, editable, pr }: { nav: (p: string, d?: any) => voi
 
   /* --- Actions on selected ATS people --- */
   const [act, setAct] = useState<"" | "job" | "pool" | "screen">("");
-  const [seqFor, setSeqFor] = useState<any[] | null>(null); const [closeBusy, setCloseBusy] = useState("");
+  const [seqFor, setSeqFor] = useState<any[] | null>(null); const [aiFor, setAiFor] = useState<any[] | null>(null); const [closeBusy, setCloseBusy] = useState("");
   const selCands = () => hits.filter(h => sel.has(h.c.id)).map(h => h.c);
   async function bulkClose() {
     const list = ids(); if (!list.length) return; setCloseBusy(`0/${list.length}`);
@@ -229,6 +230,7 @@ export function Search({ nav, editable, pr }: { nav: (p: string, d?: any) => voi
         <select onChange={e => { if (e.target.value) addToJob(e.target.value); e.target.value = ""; }} className="px-2 py-1 rounded text-slate-800 text-xs"><option value="">Add to job slate…</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}</select>
         <select onChange={e => { if (e.target.value) screenFor(e.target.value); e.target.value = ""; }} className="px-2 py-1 rounded text-slate-800 text-xs"><option value="">✦ AI-screen for job…</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.title}</option>)}</select>
         <select onChange={e => { if (e.target.value) addToPool(e.target.value); e.target.value = ""; }} className="px-2 py-1 rounded text-slate-800 text-xs"><option value="">Add to pool…</option>{pools.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+        <button onClick={() => setAiFor(selCands())} className="text-xs px-2 py-1 rounded bg-violet-500 hover:bg-violet-400 text-white font-medium" title="Claude writes a personalized email for each person; you review, then send from Gmail">✦ AI emails</button>
         <button onClick={() => setSeqFor(selCands())} className="text-xs px-2 py-1 rounded bg-teal-500 hover:bg-teal-400 text-white font-medium">➤ Apollo sequence</button>
         <button disabled={!!closeBusy} onClick={bulkClose} className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20">{closeBusy ? `Syncing ${closeBusy}…` : "⇪ Push to Close"}</button>
         <button onClick={() => setSel(new Set())} className="text-xs px-2 py-1 ml-auto">Clear</button></div>}
@@ -253,6 +255,7 @@ export function Search({ nav, editable, pr }: { nav: (p: string, d?: any) => voi
 
     {scope === "insights" && done && <Insights hits={shown} ext={ext} extTot={extTot} />}
     {seqFor && <SequenceModal cands={seqFor} onClose={() => setSeqFor(null)} onDone={() => setSel(new Set())} />}
+    {aiFor && <AIOutreachModal cands={aiFor} onClose={() => setAiFor(null)} onDone={() => setSel(new Set())} />}
     {scope === "apollo" && done && <div>
       {extErr && <div className="mb-3 text-xs px-3 py-2 rounded-lg bg-red-50 text-red-600">{extErr}</div>}
       {apF && <div className="flex gap-1.5 flex-wrap items-center mb-2 text-[11px] text-gray-500"><span>Apollo filters (AI):</span>{[...(apF.titles || []).map((t: string) => "title: " + t), ...(apF.locations || []).map((t: string) => "📍 " + t), ...(apF.seniorities || []).map((t: string) => "seniority: " + t), ...(apF.employee_ranges || []).map((t: string) => "company size: " + t.replace(",", "–")), ...(apF.industry_keywords || []).map((t: string) => "industry: " + t), ...(apF.keywords ? ["keywords: " + apF.keywords] : [])].map(t => <span key={t} className="px-2 py-0.5 rounded-full bg-violet-50 text-violet-700">{t}</span>)}<button onClick={() => { setApF(null); setTimeout(() => searchApollo(1), 0); }} className="text-blue-600 hover:underline ml-1">re-parse</button></div>}
