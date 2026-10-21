@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Section } from "@/lib/auth";
 import { Av, ToastProvider, fullName, pgq } from "@/lib/ui";
 import { Rank } from "./rank";
-import { Dash } from "@/components/dashboard";
+import { Dash } from "@/components/home";
 import { Search } from "@/components/search";
 import { Cands, Det } from "@/components/candidates";
 import { Jobs, JobDetail } from "@/components/jobs";
@@ -39,7 +39,7 @@ export default function Home() {
   const [gq, setGq] = useState(""); const [gres, setGres] = useState<any[]>([]); const [side, setSide] = useState(true);
   const nav = useCallback((p: string, d: any = {}) => { setPg(p); setPr(d); setGq(""); setGres([]); writeHash(p, d); window.scrollTo({ top: 0 }); }, []);
   useEffect(() => { const h = readHash(); setPg(h.pg); setPr(h.pr); setReady(true); const on = () => { const x = readHash(); setPg(x.pg); setPr(x.pr); }; window.addEventListener("popstate", on); return () => window.removeEventListener("popstate", on); }, []);
-  useEffect(() => { try { const s = localStorage.getItem("ss_side"); if (s === "0") setSide(false); } catch { /* */ } }, []);
+  useEffect(() => { try { const s = localStorage.getItem("ss_side"); if (s === "0" || (s === null && window.innerWidth < 768)) setSide(false); } catch { /* */ } }, []);
   useEffect(() => { if (gq.trim().length < 2) { setGres([]); return; } const t = setTimeout(async () => { const { data } = await supabase.from("candidates").select("id,first_name,last_name,current_title,email").or(`first_name.ilike.%${pgq(gq)}%,last_name.ilike.%${pgq(gq)}%,email.ilike.%${pgq(gq)}%,current_title.ilike.%${pgq(gq)}%,phone.ilike.%${pgq(gq)}%`).limit(7); setGres(data || []); }, 200); return () => clearTimeout(t); }, [gq]);
   if (loading || !ready) return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>;
   if (!profile) return <Login />;
