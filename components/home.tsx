@@ -17,14 +17,15 @@ const TABS = [["pipeline", "Pipeline"], ["search", "Search"], ["recruiters", "Re
 type Tab = (typeof TABS)[number][0];
 
 const AGENT_TAG: Record<string, string> = {
-  ai_scoring: "bg-indigo-100 text-indigo-800", ai_screening: "bg-violet-100 text-violet-800", automation: "bg-cyan-100 text-cyan-800",
+  agent_assign: "bg-violet-100 text-violet-800", agent_recommend: "bg-rose-100 text-rose-800",
+  ai_scoring: "bg-amber-100 text-amber-800", ai_screening: "bg-violet-100 text-violet-800", automation: "bg-cyan-100 text-cyan-800",
   sequence_enrolled: "bg-pink-100 text-pink-800", email_sent: "bg-pink-100 text-pink-800", application_received: "bg-emerald-100 text-emerald-800",
   stage_change: "bg-amber-100 text-amber-800", note: "bg-slate-100 text-slate-700", call: "bg-sky-100 text-sky-800",
 };
 
 async function loadAll() {
   const q = (p: any) => p.then((r: any) => { if (r.error) throw new Error(r.error.message); return r; });
-  const [jobs, cands, placed, apps, stages, tasks, people, drafts, acts, rubricLast, screenLast, campaignLast, autoLast, recsLast, newestCand, recs] = await Promise.all([
+  const [jobs, cands, placed, apps, stages, tasks, people, drafts, acts, rubricLast, screenLast, campaignLast, autoLast, recsLast, newestCand, recs, teamRecs, teamRuns, inbound] = await Promise.all([
     q(supabase.from("jobs").select("id,title,status,recruiter_id").order("title")),
     q(supabase.from("candidates").select("id", { count: "exact", head: true })),
     q(supabase.from("candidates").select("id,owner_id").eq("status", "placed").limit(5000)),
@@ -41,11 +42,17 @@ async function loadAll() {
     q(supabase.from("job_recommendations").select("created_at").order("created_at", { ascending: false }).limit(1)),
     q(supabase.from("candidates").select("created_at,source").order("created_at", { ascending: false }).limit(1)),
     q(supabase.from("job_recommendations").select("id,job_id,candidate_id,name,title,score,reason,status").eq("status", "suggested").gte("score", 70).order("score", { ascending: false }).limit(300)),
+    q(supabase.from("recommendations").select("id,recruiter_id,kind,priority,message,candidate_id,job_id,created_at").eq("status", "open").order("created_at", { ascending: false }).limit(300)),
+    q(supabase.from("activities").select("type,created_at,description").in("type", ["agent_assign", "agent_recommend"]).order("created_at", { ascending: false }).limit(20)),
+    q(supabase.from("emails").select("created_at").eq("direction", "inbound").order("created_at", { ascending: false }).limit(1)),
   ]);
   return {
     jobs: jobs.data || [], candidateCount: cands.count || 0, placed: placed.data || [], apps: apps.data || [], stages: stages.data || [],
-    tasks: tasks.data || [], people: people.data || [], drafts: drafts.data || [], acts: acts.data || [], recs: recs.data || [],
+    tasks: tasks.data || [], people: people.data || [], drafts: drafts.data || [], acts: acts.data || [], recs: recs.data || [], teamRecs: teamRecs.data || [],
     last: {
+      assign: teamRuns.data?.find((a: any) => a.type === "agent_assign")?.created_at, assignDetail: teamRuns.data?.find((a: any) => a.type === "agent_assign")?.description,
+      recommend: teamRuns.data?.find((a: any) => a.type === "agent_recommend")?.created_at, recommendDetail: teamRuns.data?.find((a: any) => a.type === "agent_recommend")?.description,
+      sync: inbound.data?.[0]?.created_at,
       rubric: rubricLast.data?.[0]?.created_at, screening: screenLast.data?.[0]?.created_at, outreach: campaignLast.data?.[0]?.ran_at,
       outreachDetail: campaignLast.data?.[0], automation: autoLast.data?.[0]?.created_at, sourcing: recsLast.data?.[0]?.created_at,
       intake: newestCand.data?.[0]?.created_at, intakeSource: newestCand.data?.[0]?.source,
@@ -66,7 +73,7 @@ export function Dash({ nav }: { nav: Nav }) {
   if (err) return <div className="py-20 text-center text-red-500 text-sm">Dashboard failed to load: {err} <button onClick={refresh} className="underline ml-2">Retry</button></div>;
   if (!d) return <div className="py-20 text-center text-gray-400">Loading...</div>;
 
-  const lastAgentRun = Object.entries(d.last).filter(([k]) => k !== "outreachDetail" && k !== "intakeSource").map(([, v]) => v as string).filter(Boolean).sort().pop();
+  const lastAgentRun = Object.entries(d.last).filter(([k]) => !/Detail|Source/.test(k)).map(([, v]) => v as string).filter(Boolean).sort().pop();
   const live = isRecent(lastAgentRun);
   const mineTasks = d.tasks.filter((t: any) => isAdmin || t.assigned_to_id === profile?.id);
   const openJobs = d.jobs.filter((j: any) => j.status === "open");
@@ -125,7 +132,20 @@ function RecruitersTab({ d, recruiters, me, isAdmin, nav, refresh }: { d: Data; 
   const uniqStages = d.stages.filter((s: any, i: number, arr: any[]) => arr.findIndex(x => x.name === s.name) === i);
   const stageName = (id: string) => d.stages.find((s: any) => s.id === id)?.name || uniqStages[0]?.name;
   const unassigned = d.tasks.filter((t: any) => !t.assigned_to_id);
+  const teamFlags = d.teamRecs.filter((x: any) => !x.recruiter_id || !ids.includes(x.recruiter_id));
+  async function closeRec(id: string, status: "done" | "dismissed") {
+    const { error } = await supabase.from("recommendations").update({ status }).eq("id", id);
+    if (error) say(error.message, false); else refresh();
+  }
   return <div className="space-y-6">
+    {isAdmin && teamFlags.length > 0 && <section className="rounded-xl border bg-white p-4">
+      <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold"><span className="text-amber-500">💡</span>Team recommendations</h2>
+      <ul className="space-y-1.5">{teamFlags.slice(0, 8).map((x: any) => <li key={x.id} className="flex items-start gap-2 text-sm">
+        <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${PRIORITY_TONE[x.priority] || "bg-slate-400"}`} />
+        <button onClick={() => x.job_id ? nav("job", { id: x.job_id }) : x.candidate_id ? nav("det", { id: x.candidate_id }) : undefined} className="min-w-0 flex-1 text-left hover:underline">{x.message}</button>
+        <button onClick={() => closeRec(x.id, "dismissed")} aria-label="Dismiss" className="text-gray-400 hover:text-gray-700">✕</button>
+      </li>)}</ul>
+    </section>}
     {shown.length === 0 && <Empty t="No recruiter accounts yet. Add one in Settings." />}
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {shown.map(r => {
@@ -134,7 +154,8 @@ function RecruitersTab({ d, recruiters, me, isAdmin, nav, refresh }: { d: Data; 
         const hired = d.placed.filter((c: any) => c.owner_id === r.id).length;
         const tasks = d.tasks.filter((t: any) => t.assigned_to_id === r.id).sort((a: any, b: any) => (PORDER[a.priority] ?? 9) - (PORDER[b.priority] ?? 9) || Date.parse(a.due_date || "9999") - Date.parse(b.due_date || "9999"));
         const myJobs = new Set(d.jobs.filter((j: any) => j.recruiter_id === r.id && j.status === "open").map((j: any) => j.id));
-        const recs = d.recs.filter((x: any) => myJobs.has(x.job_id)).slice(0, 4);
+        const recs = d.recs.filter((x: any) => myJobs.has(x.job_id)).slice(0, 2);
+        const flags = d.teamRecs.filter((x: any) => x.recruiter_id === r.id).sort((a: any, b: any) => (PORDER[a.priority] ?? 9) - (PORDER[b.priority] ?? 9)).slice(0, 4);
         const name = r.first_name || r.email;
         return <article key={r.id} className="flex min-w-0 flex-col rounded-xl border bg-white p-4">
           <header className="mb-3 flex items-center gap-3">
@@ -144,7 +165,8 @@ function RecruitersTab({ d, recruiters, me, isAdmin, nav, refresh }: { d: Data; 
           <dl className="mb-3 grid grid-cols-3 text-center">
             {([["Active", active], ["Tasks", tasks.length], ["Hired", hired]] as const).map(([l, v]) => <div key={l}><dd className="text-xl font-bold tabular-nums">{v}</dd><dt className="text-xs text-gray-400">{l}</dt></div>)}
           </dl>
-          {recs.length > 0 && <ul className="mb-2 space-y-1 rounded-lg bg-amber-50 p-2 text-xs">
+          {(flags.length > 0 || recs.length > 0) && <ul className="mb-2 space-y-1 rounded-lg bg-amber-50 p-2 text-xs">
+            {flags.map((x: any) => <li key={x.id} className="flex items-start gap-1.5"><span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${PRIORITY_TONE[x.priority] || "bg-slate-400"}`} /><button onClick={() => x.candidate_id ? nav("det", { id: x.candidate_id }) : x.job_id ? nav("job", { id: x.job_id }) : undefined} className="min-w-0 flex-1 text-left hover:underline">{x.message}</button><button onClick={() => closeRec(x.id, "done")} aria-label="Mark done" className="text-gray-400 hover:text-emerald-600">✓</button></li>)}
             {recs.map((x: any) => <li key={x.id} className="flex items-start gap-1.5"><span className="text-amber-600">💡</span><button onClick={() => x.candidate_id ? nav("det", { id: x.candidate_id }) : nav("job", { id: x.job_id, tab: "slate" })} className="min-w-0 flex-1 text-left hover:underline">Contact <b>{x.name || "a match"}</b> ({x.score}) for {jobTitle(x.job_id)}</button></li>)}
           </ul>}
           <ul className="divide-y border-t">
@@ -181,12 +203,12 @@ function RecruitersTab({ d, recruiters, me, isAdmin, nav, refresh }: { d: Data; 
 
 /* ---------------- AI Agents ---------------- */
 const AGENTS = [
-  { id: "rubric", name: "Scoring", border: "border-t-indigo-500", help: "Scores every new candidate on 7 job-related dimensions (spoken English on clarity, not accent). Ranks only; recruiters decide.", run: { fn: "score-candidate", body: { action: "sweep" } }, sched: "Every 5 minutes" },
-  { id: "screening", name: "Screening", border: "border-t-violet-500", help: "Screens new applications against each job's rubric and moves strong ones to Pre-Screen. Never rejects.", run: { fn: "screening-agent", body: { action: "run", limit: 4 } }, sched: "Every 5 minutes" },
-  { id: "sourcing", name: "Sourcing", border: "border-t-amber-500", help: "Suggests matching people for each open job from your pool and Apollo.", sched: "Hourly and nightly" },
-  { id: "outreach", name: "Outreach", border: "border-t-pink-500", help: "Runs approved Apollo campaigns and sequences.", sched: "Weekdays, US hours" },
-  { id: "automation", name: "Automations", border: "border-t-cyan-500", help: "Stage emails, tasks and follow-ups from your automation rules.", sched: "Every minute" },
-  { id: "intake", name: "Intake", border: "border-t-emerald-500", help: "Imports new applicants from sheets, Indeed and Apollo.", sched: "Every 30 minutes" },
+  { id: "sourcing", name: "Sourcer", border: "border-t-indigo-500", help: "Finds matching people for each open role from your pool and Apollo, so every role keeps a full pipeline.", run: { fn: "recruit-agent", body: { action: "recommend_due" } }, sched: "Hourly" },
+  { id: "rubric", name: "Screener", border: "border-t-amber-500", help: "Scores every new candidate 0-100 on 7 job-related dimensions (spoken English on clarity, not accent). Ranks only; recruiters decide.", run: { fn: "score-candidate", body: { action: "sweep" } }, sched: "Every 5 minutes" },
+  { id: "assign", name: "Assigner", border: "border-t-violet-500", help: "Routes unowned candidates to Carla, Roe and the team by role and workload, and creates their first task.", run: { fn: "team-agents", body: { action: "assign" } }, sched: "Every 30 minutes" },
+  { id: "outreach", name: "Outreach", border: "border-t-emerald-500", help: "Drafts personal emails for approved matches and sends only what a recruiter approved.", sched: "Weekdays, US hours" },
+  { id: "sync", name: "Reply sync", border: "border-t-sky-500", help: "Pulls replies and bounces back from Gmail and Apollo onto each candidate's timeline.", sched: "Every 10 minutes" },
+  { id: "recommend", name: "Recommender", border: "border-t-rose-500", help: "Flags replies, stalled candidates, overdue tasks, waiting drafts and thin pipelines for each recruiter.", run: { fn: "team-agents", body: { action: "recommend" } }, sched: "Hourly" },
 ] as const;
 
 function AgentsTab({ d, canRun, refresh, nav }: { d: Data; canRun: boolean; refresh: () => void; nav: Nav }) {
@@ -194,11 +216,11 @@ function AgentsTab({ d, canRun, refresh, nav }: { d: Data; canRun: boolean; refr
   async function run(a: (typeof AGENTS)[number]) {
     if (!("run" in a)) return;
     setRunning(a.id);
-    try { const r = await fn(a.run.fn, a.run.body, { timeoutMs: 170000 }); say(`${a.name} agent finished${r?.scored != null ? `: ${r.scored} scored` : r?.screened != null ? `: ${r.screened} screened` : ""}.`); refresh(); }
+    try { const r = await fn(a.run.fn, a.run.body, { timeoutMs: 170000 }); say(`${a.name} agent finished${r?.scored != null ? `: ${r.scored} scored` : r?.assigned != null ? `: ${r.assigned} assigned` : r?.added != null ? `: ${r.added} new` : ""}.`); refresh(); }
     catch (e: any) { say(`${a.name}: ${e?.message || e}`, false); }
     setRunning("");
   }
-  const detail = (id: string) => id === "outreach" && d.last.outreachDetail ? `${d.last.outreachDetail.enrolled ?? 0} enrolled, ${d.last.outreachDetail.emails_sent ?? 0} emails` : id === "intake" && d.last.intakeSource ? `Latest from ${String(d.last.intakeSource).replace(/_/g, " ")}` : "";
+  const detail = (id: string) => id === "outreach" && d.last.outreachDetail ? `${d.last.outreachDetail.enrolled ?? 0} enrolled, ${d.last.outreachDetail.emails_sent ?? 0} emails` : id === "assign" ? d.last.assignDetail || "" : id === "recommend" ? d.last.recommendDetail || "" : "";
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3"><p className="min-w-0 text-sm text-gray-500">Agents run on their own schedules. A dot turns green when an agent ran in the last 4 days.</p><button onClick={() => nav("campaigns")} className="text-xs px-2.5 py-1.5 border rounded-lg bg-white hover:bg-gray-50">Campaigns &amp; agent settings →</button></div>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
