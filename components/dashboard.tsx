@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth";
 import { B, Av, Widget, Empty, days, ago, scoreText, fullName, Btn } from "@/lib/ui";
 
-export function Dash({ nav }: { nav: (p: string, d?: any) => void }) {
+export function Insights({ nav }: { nav: (p: string, d?: any) => void }) {
   const { profile } = useAuth();
   const [d, setD] = useState<any>(null); const [err, setErr] = useState("");
   useEffect(() => { (async () => {

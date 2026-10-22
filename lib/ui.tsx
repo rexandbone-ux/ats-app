@@ -115,3 +115,17 @@ export function MediaLink({ label, url }: { label: string; url?: string }) {
     {!e && <a href={url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline break-all">{url}</a>}
   </div>;
 }
+
+/* ---------------- Design tones (recruiter colours, score chips, agent tags) ---------------- */
+const RECRUITER_TONES = [
+  { chip: "bg-indigo-100 text-indigo-800", avatar: "bg-indigo-500" },
+  { chip: "bg-pink-100 text-pink-800", avatar: "bg-pink-500" },
+  { chip: "bg-amber-100 text-amber-800", avatar: "bg-amber-500" },
+  { chip: "bg-cyan-100 text-cyan-800", avatar: "bg-cyan-600" },
+  { chip: "bg-emerald-100 text-emerald-800", avatar: "bg-emerald-600" },
+  { chip: "bg-violet-100 text-violet-800", avatar: "bg-violet-500" },
+];
+/** Stable colour per recruiter: index in the id-sorted list, so everyone sees the same colour. */
+export function recruiterTone(ids: string[], id?: string | null) { const i = id ? [...ids].sort().indexOf(id) : -1; return i < 0 ? { chip: "bg-gray-100 text-gray-700", avatar: "bg-slate-400" } : RECRUITER_TONES[i % RECRUITER_TONES.length]; }
+export function scoreTone(s: number | null | undefined) { return s == null ? "bg-gray-100 text-gray-400" : s >= 80 ? "bg-emerald-100 text-emerald-800" : s >= 65 ? "bg-sky-100 text-sky-800" : s >= 45 ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-700"; }
+export const PRIORITY_TONE: Record<string, string> = { urgent: "bg-rose-500", high: "bg-orange-400", medium: "bg-sky-400", low: "bg-slate-300" };
