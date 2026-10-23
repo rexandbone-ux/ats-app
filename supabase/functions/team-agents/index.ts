@@ -62,8 +62,10 @@ async function assign() {
   const out: any[] = [];
   const due = new Date(Date.now() + 86400000).toISOString();
   for (const a of todo) {
-    // The job's own recruiter first if they're on the team, otherwise whoever has the lightest load.
-    const owner = a.jobs?.recruiter_id && a.jobs.recruiter_id in load ? a.jobs.recruiter_id : Object.entries(load).sort((x, y) => x[1] - y[1])[0][0];
+    // Whoever has the lightest load; the job's own recruiter only while they're within 10% of it.
+    const lightest = Object.entries(load).sort((x, y) => x[1] - y[1])[0];
+    const jobOwner = a.jobs?.recruiter_id;
+    const owner = jobOwner && jobOwner in load && load[jobOwner] <= lightest[1] * 1.1 + 5 ? jobOwner : lightest[0];
     await sb(`candidates?id=eq.${a.candidate_id}&owner_id=is.null`, { method: "PATCH", body: JSON.stringify({ owner_id: owner, assigned_at: new Date().toISOString() }) });
     load[owner]++;
     const open = await sb(`tasks?candidate_id=eq.${a.candidate_id}&status=in.(pending,in_progress)&select=id&limit=1`);

@@ -7,10 +7,11 @@
 //   {action:"status"}                                      — config + counts
 //   {action:"sweep", limit?}                               — score new arrivals since app_secrets.rubric_autoscore_since (cron, every 5 min)
 //   {action:"score", candidate_id, job_id?, application_id?} — score one candidate now
+//   {action:"backlog"}                                     — one tick of the half-price batch run over rubric_backlog
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { assessCandidate, DIMENSIONS, type CandidateEvidence, type RoleSpec } from "../_shared/rubric.ts";
+import { assessCandidate, assessmentParams, AssessmentSchema, overallScore, roleFamily, DIMENSIONS, type Assessment, type CandidateEvidence, type RoleSpec } from "../_shared/rubric.ts";
 import { transcribeUrl, type SpeechResult } from "../_shared/transcribe.ts";
-import { HttpError, type ContentBlock } from "../_shared/claude.ts";
+import { HttpError, submitBatch, batchStatus, batchResults, type ContentBlock } from "../_shared/claude.ts";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -166,7 +167,8 @@ async function roleFor(cand: any, jobId: string | null): Promise<{ role: RoleSpe
 }
 
 // ---------- Score one ----------
-async function scoreOne(apiKey: string, dgKey: string, candidateId: string, jobId: string | null, applicationId: string | null) {
+/** Everything the rubric needs for one candidate: role, evidence, transcript and resume. */
+async function gather(dgKey: string, candidateId: string, jobId: string | null, applicationId: string | null) {
   const cand = await one(`candidates?id=eq.${candidateId}&select=*`);
   if (!cand) throw new HttpError(404, "candidate not found");
   const app = applicationId ? await one(`applications?id=eq.${applicationId}&select=*`) : null;
@@ -196,8 +198,20 @@ async function scoreOne(apiKey: string, dgKey: string, candidateId: string, jobI
     source: cand.source,
   };
 
-  const r = await assessCandidate(apiKey, role, evidence, pdf);
-  const a = r.assessment;
+  return { cand, app, job, role, evidence, pdf, notes, speech, resume: hasText ? "text" : pdf ? "pdf" : "none" };
+}
+type Gathered = Awaited<ReturnType<typeof gather>>;
+
+async function scoreOne(apiKey: string, dgKey: string, candidateId: string, jobId: string | null, applicationId: string | null) {
+  const g = await gather(dgKey, candidateId, jobId, applicationId);
+  const r = await assessCandidate(apiKey, g.role, g.evidence, g.pdf);
+  return await save({ ...g, answers: !!g.evidence.application_answers }, r.assessment, r.usage, r.model);
+}
+
+/** Write one assessment to screening_results, the candidate and the activity log. Shared by live and batch scoring. */
+async function save(g: Pick<Gathered, "cand" | "app" | "job" | "role" | "notes" | "speech" | "resume"> & { answers?: boolean }, a: Assessment, usage: unknown, model: string) {
+  const { cand, app, job, role, notes, speech } = g;
+  const r = { ...overallScore(a, roleFamily(role.title, role.department ?? "")), model, usage };
   const concerns = [...a.concerns, ...notes.map((n) => `Data: ${n}`)].slice(0, 6);
   const tierLabel: Record<string, string> = { top: "Top match", strong: "Strong", possible: "Possible", low: "Low match", review: "Needs review" };
   // Never a rejection: the lowest outcome is "recruiter review".
@@ -213,7 +227,7 @@ async function scoreOne(apiKey: string, dgKey: string, candidateId: string, jobI
     writing_errors: a.writing_errors, writing_error_count: r.writing_error_count,
     strengths: a.strengths, concerns, red_flags: a.red_flags, interview_questions: a.interview_questions, summary: a.summary,
     speech: speech ? { metrics: speech.metrics, duration_seconds: speech.duration_seconds } : null,
-    inputs: { resume: hasText ? "text" : pdf ? "pdf" : "none", transcript: !!speech, answers: !!evidence.application_answers, notes },
+    inputs: { resume: g.resume, transcript: !!speech, answers: g.answers ?? false, notes },
     usage: r.usage,
   };
 
@@ -245,6 +259,87 @@ async function scoreOne(apiKey: string, dgKey: string, candidateId: string, jobI
     }),
   });
   return result;
+}
+
+// ---------- Backlog (Message Batches API, half price) ----------
+// rubric_backlog rows move queued -> prepared -> submitted -> done | error. Each tick gathers evidence for a few
+// candidates, submits prepared ones in batches, and saves finished batch results. Spend stops at the cap.
+const PREP_PER_TICK = 30;
+const BATCH_SIZE = 100;
+// Batch prices for claude-opus-5-5: half of $4 / $20 per million tokens.
+const costOf = (u: any) => !u ? 0 : ((u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) * 1.25 + (u.cache_read_input_tokens || 0) * 0.1) * 2 / 1e6 + (u.output_tokens || 0) * 10 / 1e6;
+
+async function backlogTick(apiKey: string, dgKey: string) {
+  const started = Date.now();
+  const out: Record<string, unknown> = {};
+  const cap = Number(await secret("rubric_backlog_cap_usd")) || 0;
+
+  // 1. Collect finished batches.
+  const open = (await sb(`rubric_backlog?status=eq.submitted&select=batch_id&limit=5000`)) as any[];
+  let saved = 0, failed = 0;
+  for (const batchId of [...new Set(open.map((r) => r.batch_id))]) {
+    const b = await batchStatus(apiKey, batchId);
+    if (b.processing_status !== "ended") continue;
+    for await (const r of batchResults(apiKey, batchId, AssessmentSchema)) {
+      const row = await one(`rubric_backlog?candidate_id=eq.${r.custom_id}&select=*`);
+      if (!row || row.status !== "submitted") continue;
+      try {
+        if (!("output" in r) || !r.output) throw new Error(r.error || "no output");
+        const cand = await one(`candidates?id=eq.${row.candidate_id}&select=*`);
+        const job = row.job_id ? await one(`jobs?id=eq.${row.job_id}&select=*`) : null;
+        const app = row.application_id ? await one(`applications?id=eq.${row.application_id}&select=*`) : null;
+        const m = row.meta || {};
+        await save({ cand, app, job, role: m.role, notes: m.notes || [], speech: m.speech || null, resume: m.resume || "none", answers: !!m.answers }, r.output, r.usage, r.model);
+        await sb(`rubric_backlog?candidate_id=eq.${row.candidate_id}`, { method: "PATCH", body: JSON.stringify({ status: "done", cost_usd: costOf(r.usage), updated_at: new Date().toISOString() }) });
+        saved++;
+      } catch (e) {
+        await sb(`rubric_backlog?candidate_id=eq.${row.candidate_id}`, { method: "PATCH", body: JSON.stringify({ status: "error", error: clip(String((e as Error)?.message || e), 300), updated_at: new Date().toISOString() }) });
+        failed++;
+      }
+      if (Date.now() - started > 100000) break;
+    }
+  }
+  out.collected = { saved, failed };
+
+  const spent = ((await sb(`rubric_backlog?status=eq.done&select=cost_usd&limit=10000`)) as any[]).reduce((t, r) => t + Number(r.cost_usd || 0), 0);
+  out.spent_usd = Math.round(spent * 100) / 100;
+  if (cap && spent >= cap) return { ...out, stopped: `cost cap $${cap} reached` };
+
+  // 2. Gather evidence (transcripts, resumes) for queued candidates.
+  const queued = (await sb(`rubric_backlog?status=eq.queued&select=*&order=queued_at&limit=${PREP_PER_TICK}`)) as any[];
+  let prepared = 0;
+  for (let i = 0; i < queued.length && Date.now() - started < 110000; i += 5) {
+    await Promise.all(queued.slice(i, i + 5).map(async (row) => {
+      try {
+        const g = await gather(dgKey, row.candidate_id, row.job_id, row.application_id);
+        const params = assessmentParams(g.role, g.evidence, g.pdf);
+        await sb(`rubric_backlog?candidate_id=eq.${row.candidate_id}`, { method: "PATCH", body: JSON.stringify({
+          status: "prepared", job_id: g.job?.id ?? null, params,
+          meta: { role: g.role, notes: g.notes, speech: g.speech ? { transcript: g.speech.transcript, metrics: g.speech.metrics, duration_seconds: g.speech.duration_seconds } : null, resume: g.resume, answers: !!g.evidence.application_answers },
+          updated_at: new Date().toISOString(),
+        }) });
+        prepared++;
+      } catch (e) {
+        await sb(`rubric_backlog?candidate_id=eq.${row.candidate_id}`, { method: "PATCH", body: JSON.stringify({ status: "error", error: clip(String((e as Error)?.message || e), 300), updated_at: new Date().toISOString() }) });
+      }
+    }));
+  }
+  out.prepared = prepared;
+
+  // 3. Submit a batch once enough are prepared, or when nothing is left to prepare.
+  const remainingQueued = ((await sb(`rubric_backlog?status=eq.queued&select=candidate_id&limit=1`)) as any[]).length;
+  const ready = (await sb(`rubric_backlog?status=eq.prepared&select=candidate_id,params&limit=${BATCH_SIZE}`)) as any[];
+  if (ready.length && (ready.length >= BATCH_SIZE || !remainingQueued)) {
+    const batch = await submitBatch(apiKey, ready.map((r) => ({ custom_id: r.candidate_id, params: r.params })));
+    for (let i = 0; i < ready.length; i += 100) {
+      const ids = ready.slice(i, i + 100).map((r) => r.candidate_id).join(",");
+      await sb(`rubric_backlog?candidate_id=in.(${ids})`, { method: "PATCH", body: JSON.stringify({ status: "submitted", batch_id: batch.id, params: null, updated_at: new Date().toISOString() }) });
+    }
+    out.submitted = { batch_id: batch.id, count: ready.length };
+  }
+  const counts = (await sb(`rubric_backlog?select=status&limit=10000`)) as any[];
+  out.status = counts.reduce((m: Record<string, number>, r) => { m[r.status] = (m[r.status] || 0) + 1; return m; }, {});
+  return out;
 }
 
 async function markFailure(candidateId: string, err: unknown) {
@@ -299,6 +394,8 @@ Deno.serve(async (req: Request) => {
       }
       return json({ ok: true, scored: results.filter((r) => r.score != null).length, results });
     }
+
+    if (action === "backlog") return json({ ok: true, ...(await backlogTick(apiKey, dgKey)) });
 
     return json({ error: `unknown action '${action}'` }, 400);
   } catch (e) {
