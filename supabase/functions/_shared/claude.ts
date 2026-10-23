@@ -43,3 +43,37 @@ export async function structured<S extends z.ZodType>(opts: {
   if (!response.parsed_output) throw new HttpError(502, "The model returned output that did not match the expected format.");
   return { output: response.parsed_output, usage: response.usage, model: response.model };
 }
+
+/** The same request as structured(), as plain params for the Message Batches API (half price, results within 24h). */
+export function batchParams<S extends z.ZodType>(opts: { system: string; user: string | ContentBlock[]; schema: S; effort?: "low" | "medium" | "high"; maxTokens?: number }) {
+  const { parse: _parse, ...format } = betaZodOutputFormat(opts.schema) as any;
+  return {
+    model: MODEL,
+    max_tokens: opts.maxTokens ?? 8000,
+    system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
+    messages: [{ role: "user", content: opts.user }],
+    output_config: { effort: opts.effort ?? "medium", format },
+  };
+}
+
+export async function submitBatch(apiKey: string, requests: Array<{ custom_id: string; params: unknown }>) {
+  return await anthropic(apiKey).beta.messages.batches.create({ requests: requests as any });
+}
+
+export async function batchStatus(apiKey: string, id: string) {
+  return await anthropic(apiKey).beta.messages.batches.retrieve(id);
+}
+
+/** Yields each batch result with its parsed structured output, or an error message. */
+export async function* batchResults<S extends z.ZodType>(apiKey: string, id: string, schema: S) {
+  for await (const r of await anthropic(apiKey).beta.messages.batches.results(id)) {
+    if (r.result.type !== "succeeded") { yield { custom_id: r.custom_id, error: `batch ${r.result.type}` }; continue; }
+    const m = r.result.message;
+    if (m.stop_reason === "refusal") { yield { custom_id: r.custom_id, error: "The model declined this request." }; continue; }
+    if (m.stop_reason === "max_tokens") { yield { custom_id: r.custom_id, error: "The model response was cut off." }; continue; }
+    const text = m.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+    const parsed = schema.safeParse((() => { try { return JSON.parse(text); } catch { return null; } })());
+    if (!parsed.success) { yield { custom_id: r.custom_id, error: "Output did not match the expected format." }; continue; }
+    yield { custom_id: r.custom_id, output: parsed.data as z.infer<S>, usage: m.usage, model: m.model };
+  }
+}
