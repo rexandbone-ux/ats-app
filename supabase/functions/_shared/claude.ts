@@ -7,7 +7,8 @@ export class HttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-const MODEL = Deno.env.get("ANTHROPIC_MODEL") || "claude-opus-5-5";
+// Sonnet by default: the rubric is structured extraction, which does not need Opus.
+const MODEL = Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-5";
 const clients = new Map<string, Anthropic>();
 function anthropic(apiKey: string): Anthropic {
   if (!apiKey) throw new HttpError(500, "Missing ANTHROPIC_API_KEY (Supabase Edge Function secret).");
@@ -31,12 +32,12 @@ export async function structured<S extends z.ZodType>(opts: {
 }): Promise<{ output: z.infer<S>; usage: unknown; model: string }> {
   const response = await anthropic(opts.apiKey).beta.messages.parse({
     model: MODEL,
-    max_tokens: opts.maxTokens ?? 8000,
+    max_tokens: opts.maxTokens ?? 4000,
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: opts.user }],
-    output_config: { effort: opts.effort ?? "medium", format: betaZodOutputFormat(opts.schema) },
+    output_config: { effort: opts.effort ?? "low", format: betaZodOutputFormat(opts.schema) },
   });
   if (response.stop_reason === "refusal") throw new HttpError(422, "The model declined this request.");
   if (response.stop_reason === "max_tokens") throw new HttpError(502, "The model response was cut off.");
@@ -49,10 +50,10 @@ export function batchParams<S extends z.ZodType>(opts: { system: string; user: s
   const { parse: _parse, ...format } = betaZodOutputFormat(opts.schema) as any;
   return {
     model: MODEL,
-    max_tokens: opts.maxTokens ?? 8000,
+    max_tokens: opts.maxTokens ?? 4000,
     system: [{ type: "text", text: opts.system, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: opts.user }],
-    output_config: { effort: opts.effort ?? "medium", format },
+    output_config: { effort: opts.effort ?? "low", format },
   };
 }
 

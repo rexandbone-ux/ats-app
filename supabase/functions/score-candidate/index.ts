@@ -5,7 +5,7 @@
 // Auth: x-sync-secret header (or ?key=) == app_secrets.sync_secret, or a signed-in staff JWT.
 // Actions:
 //   {action:"status"}                                      — config + counts
-//   {action:"sweep", limit?}                               — score new arrivals since app_secrets.rubric_autoscore_since (cron, every 5 min)
+//   {action:"sweep", limit?}                               — score new arrivals since app_secrets.rubric_autoscore_since (cron, hourly)
 //   {action:"score", candidate_id, job_id?, application_id?} — score one candidate now
 //   {action:"backlog"}                                     — one tick of the half-price batch run over rubric_backlog
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -183,7 +183,7 @@ async function gather(dgKey: string, candidateId: string, jobId: string | null, 
   // Only job-related facts. Name, photo, location, age and similar are deliberately left out.
   const evidence: CandidateEvidence = {
     name: "Candidate",
-    resume_text: hasText ? clip(cand.resume_text, 15000) : null,
+    resume_text: hasText ? clip(cand.resume_text, 8000) : null,
     application_answers: toAnswers(app?.screening_answers || app?.candidate_answers || app?.screening_responses || cand.application_answers || cand.screening_responses),
     cover_letter: clip(app?.cover_letter || cand.cover_letter, 4000) || null,
     profile: {
@@ -193,7 +193,7 @@ async function gather(dgKey: string, candidateId: string, jobId: string | null, 
       desired_salary: cand.desired_salary ? `${cand.desired_salary} ${cand.desired_salary_period || ""}`.trim() : null,
       linkedin_headline: cand.resume_parsed_data?.headline ?? null,
     },
-    video_transcript: speech?.transcript ? clip(speech.transcript, 8000) : null,
+    video_transcript: speech?.transcript ? clip(speech.transcript, 5000) : null,
     speech_metrics: speech?.metrics ?? null,
     source: cand.source,
   };
@@ -266,7 +266,7 @@ async function save(g: Pick<Gathered, "cand" | "app" | "job" | "role" | "notes" 
 // candidates, submits prepared ones in batches, and saves finished batch results. Spend stops at the cap.
 const PREP_PER_TICK = 30;
 const BATCH_SIZE = 100;
-// Batch prices for claude-opus-5-5: half of $4 / $20 per million tokens.
+// Conservative cost estimate (kept at the old Opus batch rate so the spend cap errs on the safe side).
 const costOf = (u: any) => !u ? 0 : ((u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) * 1.25 + (u.cache_read_input_tokens || 0) * 0.1) * 2 / 1e6 + (u.output_tokens || 0) * 10 / 1e6;
 
 async function backlogTick(apiKey: string, dgKey: string) {

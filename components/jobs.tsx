@@ -70,7 +70,7 @@ export function JobDetail({ nav, pr, editable }: { nav: (p: string, d?: any) => 
   const load = useCallback(async () => {
     const [{ data }, { data: ap }, { data: lb }, { data: st }, { data: cl }, { data: pf }, { data: ac }, { data: sm }] = await Promise.all([
       supabase.from("jobs").select("*,clients(company_name)").eq("id", pr.id).single(),
-      supabase.from("applications").select("id,status,created_at,candidate_id,stage_id,submitted_to_client_at,client_decision,candidates(first_name,last_name,current_title,status,phone,email,owner_id)").eq("job_id", pr.id).order("created_at", { ascending: false }),
+      supabase.from("applications").select("id,status,rating,created_at,candidate_id,stage_id,submitted_to_client_at,client_decision,candidates(first_name,last_name,current_title,status,phone,email,owner_id)").eq("job_id", pr.id).order("created_at", { ascending: false }),
       supabase.from("v_job_leaderboard").select("*").eq("job_id", pr.id).order("rank"),
       supabase.from("pipeline_stages").select("id,pipeline_id,name,sort_order,color").order("sort_order"),
       supabase.from("clients").select("id,company_name").order("company_name"),
@@ -95,6 +95,21 @@ export function JobDetail({ nav, pr, editable }: { nav: (p: string, d?: any) => 
     setApps(list => list.map(x => x.id === appId ? { ...x, stage_id: stageId } : x));
     const { error } = await supabase.from("applications").update({ stage_id: stageId }).eq("id", appId); if (error) { say(error.message, false); load(); return; }
     logActivity("stage_change", `Stage: ${from || "—"} → ${to || "—"}`, { candidate_id: a.candidate_id, job_id: j.id, application_id: appId }, profile?.id);
+  }
+  async function rateApp(appId: string, rating: number | null) {
+    setApps(list => list.map(x => x.id === appId ? { ...x, rating } : x));
+    const { error } = await supabase.from("applications").update({ rating }).eq("id", appId); if (error) { say(error.message, false); load(); }
+  }
+  async function decide(appId: string, pass: boolean) {
+    const a = apps.find(x => x.id === appId); if (!a) return;
+    if (pass) { const i = jobStages.findIndex(s => s.id === (a.stage_id || jobStages[0]?.id)); const next = jobStages[i + 1]; if (next) await moveApp(appId, next.id); say(next ? `Passed: moved to ${next.name}.` : "Passed."); return; }
+    setApps(list => list.map(x => x.id === appId ? { ...x, status: "rejected" } : x));
+    const { error } = await supabase.from("applications").update({ status: "rejected" }).eq("id", appId); if (error) { say(error.message, false); load(); return; }
+    logActivity("stage_change", "Declined for this job", { candidate_id: a.candidate_id, job_id: j.id, application_id: appId }, profile?.id); say("Declined. Restore it from the Declined list below.");
+  }
+  async function restore(appId: string) {
+    setApps(list => list.map(x => x.id === appId ? { ...x, status: "active" } : x));
+    const { error } = await supabase.from("applications").update({ status: "active" }).eq("id", appId); if (error) { say(error.message, false); load(); }
   }
   async function deleteJob() { if (!confirm(`Delete "${j.title}"? Applications for this job are removed too. Candidates stay.`)) return; await supabase.from("applications").delete().eq("job_id", j.id); const { error } = await supabase.from("jobs").delete().eq("id", j.id); if (error) { say(error.message, false); return; } say("Job deleted."); nav("jobs"); }
   if (!j) return <div className="py-20 text-center text-gray-400">Loading...</div>;
@@ -132,8 +147,8 @@ export function JobDetail({ nav, pr, editable }: { nav: (p: string, d?: any) => 
     </div>}
 
     {tab === "pipeline" && <div>
-      {inPipe.length === 0 ? <Empty t="Nobody in this job's pipeline yet. Advance someone from the slate, or add from Search / a candidate profile." /> : <div className="flex gap-3 overflow-x-auto pb-4">{jobStages.map(s => { const col = inPipe.filter(a => (a.stage_id || jobStages[0]?.id) === s.id); return <div key={s.id} onDragOver={e => editable && e.preventDefault()} onDrop={() => { if (editable && drag) { moveApp(drag, s.id); setDrag(null); } }} className="w-56 shrink-0"><div className="flex items-center gap-2 mb-2 px-1"><span className="w-2 h-2 rounded-full" style={{ background: s.color }} /><span className="text-xs font-semibold">{s.name}</span><span className="text-[10px] text-gray-400">{col.length}</span></div><div className="space-y-2 min-h-[80px] bg-gray-50/60 rounded-lg p-1.5">{col.map(a => { const lb = rows.find(r => r.candidate_id === a.candidate_id); return <div key={a.id} draggable={editable} onDragStart={() => setDrag(a.id)} onClick={() => nav("det", { id: a.candidate_id })} className="bg-white rounded-lg border p-2.5 cursor-pointer hover:shadow-sm"><div className="flex justify-between items-start gap-1"><div className="min-w-0"><div className="text-sm font-medium truncate">{fullName(a.candidates)}</div><div className="text-[10px] text-gray-400 truncate">{a.candidates?.current_title || ""}</div></div>{lb?.score != null && <span className={`text-xs font-bold ${scoreText(lb.score)}`}>{lb.score}</span>}</div>{a.submitted_to_client_at && <div className="text-[10px] text-cyan-700 mt-1">submitted {ago(a.submitted_to_client_at)}{a.client_decision ? ` · client: ${a.client_decision}` : ""}</div>}</div>; })}</div></div>; })}</div>}
-      {apps.some(a => a.status === "rejected") && <details className="mt-2 text-xs text-gray-400"><summary className="cursor-pointer">Declined ({apps.filter(a => a.status === "rejected").length})</summary><div className="mt-1 space-y-1">{apps.filter(a => a.status === "rejected").map(a => <div key={a.id} onClick={() => nav("det", { id: a.candidate_id })} className="cursor-pointer hover:underline">{fullName(a.candidates)}</div>)}</div></details>}
+      {inPipe.length === 0 ? <Empty t="Nobody in this job's pipeline yet. Advance someone from the slate, or add from Search / a candidate profile." /> : <div className="flex gap-3 overflow-x-auto pb-4">{jobStages.map(s => { const col = inPipe.filter(a => (a.stage_id || jobStages[0]?.id) === s.id); return <div key={s.id} onDragOver={e => editable && e.preventDefault()} onDrop={() => { if (editable && drag) { moveApp(drag, s.id); setDrag(null); } }} className="w-56 shrink-0"><div className="flex items-center gap-2 mb-2 px-1"><span className="w-2 h-2 rounded-full" style={{ background: s.color }} /><span className="text-xs font-semibold">{s.name}</span><span className="text-[10px] text-gray-400">{col.length}</span></div><div className="space-y-2 min-h-[80px] bg-gray-50/60 rounded-lg p-1.5">{col.map(a => { const lb = rows.find(r => r.candidate_id === a.candidate_id); return <div key={a.id} draggable={editable} onDragStart={() => setDrag(a.id)} onClick={() => nav("det", { id: a.candidate_id })} className="bg-white rounded-lg border p-2.5 cursor-pointer hover:shadow-sm"><div className="flex justify-between items-start gap-1"><div className="min-w-0"><div className="text-sm font-medium truncate">{fullName(a.candidates)}</div><div className="text-[10px] text-gray-400 truncate">{a.candidates?.current_title || ""}</div></div>{lb?.score != null && <span className={`text-xs font-bold ${scoreText(lb.score)}`}>{lb.score}</span>}</div>{a.submitted_to_client_at && <div className="text-[10px] text-cyan-700 mt-1">submitted {ago(a.submitted_to_client_at)}{a.client_decision ? ` · client: ${a.client_decision}` : ""}</div>}<div className="flex items-center justify-between mt-1.5" onClick={e => e.stopPropagation()}><Stars v={a.rating} on={editable ? (n => rateApp(a.id, n === a.rating ? null : n)) : undefined} />{editable && <div className="flex gap-1"><button title="Pass: move to next stage" onClick={() => decide(a.id, true)} className="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-700 hover:bg-green-100 font-semibold">Pass</button><button title="Fail: decline for this job" onClick={() => decide(a.id, false)} className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 hover:bg-red-100 font-semibold">Fail</button></div>}</div></div>; })}</div></div>; })}</div>}
+      {apps.some(a => a.status === "rejected") && <details className="mt-2 text-xs text-gray-400"><summary className="cursor-pointer">Declined ({apps.filter(a => a.status === "rejected").length})</summary><div className="mt-1 space-y-1">{apps.filter(a => a.status === "rejected").map(a => <div key={a.id} className="flex gap-2 items-center"><span onClick={() => nav("det", { id: a.candidate_id })} className="cursor-pointer hover:underline">{fullName(a.candidates)}</span>{editable && <button onClick={() => restore(a.id)} className="text-blue-600 hover:underline">restore</button>}</div>)}</div></details>}
     </div>}
 
     {tab === "details" && <div className="grid md:grid-cols-2 gap-4">
@@ -151,4 +166,9 @@ export function JobDetail({ nav, pr, editable }: { nav: (p: string, d?: any) => 
     {open && <Audit row={open} job={{ ...j, job: j, title: j.title }} jobStages={jobStages} recs={recs} recMap={recMap} editable={editable} profileId={profile?.id} onClose={() => setOpen(null)} onChanged={load} say={say} nav={nav} />}
     {brief && <BriefModal job={j} onClose={() => setBrief(false)} onSaved={async (regen: boolean) => { setBrief(false); await load(); if (regen) regenRubric(); else say("Brief saved."); }} />}
   </div>;
+}
+
+/** 1-5 quick rating. Click a star to set it, click the same star again to clear. */
+function Stars({ v, on }: { v?: number | null; on?: (n: number) => void }) {
+  return <span className="inline-flex">{[1, 2, 3, 4, 5].map(n => <button key={n} type="button" disabled={!on} onClick={() => on?.(n)} className={`text-sm leading-none ${(v || 0) >= n ? "text-amber-400" : "text-gray-200"} ${on ? "hover:text-amber-300" : "cursor-default"}`}>★</button>)}</span>;
 }
