@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import { Priority } from "@/components/priority";
 import { useAuth, can, canEdit, canManageUsers, ROLE_LABELS, Section } from "@/lib/auth";
 import { Av, ToastProvider, fullName, pgq } from "@/lib/ui";
 import { Rank } from "./rank";
@@ -24,7 +25,7 @@ import { Login } from "@/components/login";
 /* ---------------- Shell ---------------- */
 type NavItem = { id: Section; l: string; i: string };
 const GROUPS: { t: string; items: NavItem[] }[] = [
-  { t: "Work", items: [{ id: "dash", l: "Dashboard", i: "▦" }, { id: "search", l: "Search", i: "⌕" }, { id: "jobs", l: "Jobs", i: "◧" }, { id: "cands", l: "Candidates", i: "◉" }, { id: "pipeline", l: "Pipeline", i: "⇶" }, { id: "rank", l: "Rank", i: "★" }, { id: "interviews", l: "Interviews", i: "▤" }, { id: "tasks", l: "Tasks", i: "✓" }] },
+  { t: "Work", items: [{ id: "dash", l: "Dashboard", i: "▦" }, { id: "priority", l: "Contact next", i: "☎" }, { id: "search", l: "Search", i: "⌕" }, { id: "jobs", l: "Jobs", i: "◧" }, { id: "cands", l: "Candidates", i: "◉" }, { id: "pipeline", l: "Pipeline", i: "⇶" }, { id: "rank", l: "Rank", i: "★" }, { id: "interviews", l: "Interviews", i: "▤" }, { id: "tasks", l: "Tasks", i: "✓" }] },
   { t: "Grow", items: [{ id: "sourcing", l: "Sourcing (Apollo)", i: "◎" }, { id: "claudesearch", l: "Claude Search", i: "✦" }, { id: "campaigns", l: "Agents", i: "➤" }] },
   { t: "Manage", items: [{ id: "clients", l: "Clients", i: "▣" }, { id: "placements", l: "Placements", i: "◆" }, { id: "pools", l: "Talent pools", i: "❖" }, { id: "reports", l: "Reports", i: "▥" }, { id: "settings", l: "Settings", i: "⚙" }] },
 ];
@@ -44,6 +45,7 @@ export default function Home() {
   if (loading || !ready) return <div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>;
   if (!profile) return <Login />;
   if (profile.role === "client_user") return <ClientPortal />;
+  if (profile.is_active === false) return <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6"><div className="max-w-md bg-white border rounded-xl p-6 text-center"><h1 className="text-lg font-semibold mb-2">This login is switched off</h1><p className="text-sm text-gray-500 mb-4">You're signed in as <b>{profile.email}</b>, which is inactive, so no candidates or jobs can load. Sign in with your own account, or ask an admin to reactivate this one under Settings, Users.</p><button onClick={signOut} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm">Sign out</button></div></div>;
   const role = profile.role; const editable = canEdit(role);
   const allowed = (s: string) => can(role, s as Section);
   const R = () => {
@@ -54,6 +56,7 @@ export default function Home() {
       case "det": return allowed("cands") ? <Det nav={nav} pr={pr} editable={editable} /> : <Denied />;
       case "pipeline": return allowed("pipeline") ? <Pipeline nav={nav} editable={editable} pr={pr} /> : <Denied />;
       case "rank": return allowed("rank") ? <Rank nav={nav} pr={pr} editable={editable} /> : <Denied />;
+      case "priority": return allowed("priority") ? <Priority nav={nav} editable={editable} /> : <Denied />;
       case "jobs": return allowed("jobs") ? <Jobs nav={nav} editable={editable} pr={pr} /> : <Denied />;
       case "job": return allowed("jobs") ? <JobDetail key={pr.id} nav={nav} pr={pr} editable={editable} /> : <Denied />;
       case "clients": return allowed("clients") ? <Clients nav={nav} editable={editable} /> : <Denied />;

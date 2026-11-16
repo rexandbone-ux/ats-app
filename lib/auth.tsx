@@ -14,14 +14,14 @@ export type Profile = {
 };
 
 // Nav sections each role can see.
-export const SECTIONS = ["dash", "search", "jobs", "cands", "pipeline", "rank", "clients", "placements", "pools", "interviews", "tasks", "reports", "sourcing", "claudesearch", "campaigns", "outreach", "settings"] as const;
+export const SECTIONS = ["dash", "priority", "search", "jobs", "cands", "pipeline", "rank", "clients", "placements", "pools", "interviews", "tasks", "reports", "sourcing", "claudesearch", "campaigns", "outreach", "settings"] as const;
 export type Section = (typeof SECTIONS)[number];
 
 const ACCESS: Record<Role, Section[]> = {
-  super_admin: ["dash", "search", "jobs", "cands", "pipeline", "rank", "clients", "placements", "pools", "interviews", "tasks", "reports", "sourcing", "claudesearch", "campaigns", "outreach", "settings"],
-  admin: ["dash", "search", "jobs", "cands", "pipeline", "rank", "clients", "placements", "pools", "interviews", "tasks", "reports", "sourcing", "claudesearch", "campaigns", "outreach", "settings"],
-  recruiter: ["dash", "search", "jobs", "cands", "pipeline", "rank", "clients", "placements", "pools", "interviews", "tasks", "reports", "sourcing", "claudesearch", "campaigns", "outreach"],
-  hiring_manager: ["dash", "search", "jobs", "cands", "pipeline", "rank", "interviews", "reports"],
+  super_admin: ["dash", "priority", "search", "jobs", "cands", "pipeline", "rank", "clients", "placements", "pools", "interviews", "tasks", "reports", "sourcing", "claudesearch", "campaigns", "outreach", "settings"],
+  admin: ["dash", "priority", "search", "jobs", "cands", "pipeline", "rank", "clients", "placements", "pools", "interviews", "tasks", "reports", "sourcing", "claudesearch", "campaigns", "outreach", "settings"],
+  recruiter: ["dash", "priority", "search", "jobs", "cands", "pipeline", "rank", "clients", "placements", "pools", "interviews", "tasks", "reports", "sourcing", "claudesearch", "campaigns", "outreach"],
+  hiring_manager: ["dash", "priority", "search", "jobs", "cands", "pipeline", "rank", "interviews", "reports"],
   client_user: ["dash", "jobs", "cands"],
   candidate_user: ["dash"],
 };
