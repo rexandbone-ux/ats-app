@@ -437,7 +437,19 @@ async function extractFromFetched(r: Resolved, apiKey: string): Promise<Extracte
 }
 
 // ---------- Persist ----------
+// Dead links (file deleted, a folder, private/sign-in, sites that block bots) never start working on retry.
+// Mark them "unreadable" so the queue stops re-fetching them; recruiters see a flag to ask the candidate for a file.
+const PERMANENT_RE = /file not found|folder, not a file|not public|sign-in required|blocks automated access|renders client-side|no transcript or downloadable media|returned HTML instead of a file|HTTP 40[134]\b/i;
+function markPermanent(rec: any) {
+  if (rec && rec.status === "failed" && PERMANENT_RE.test(String(rec.note || ""))) {
+    rec.status = "unreadable";
+    rec.flag = "ask candidate for a downloadable file";
+  }
+  return rec;
+}
+
 async function saveEnrich(cand: any, part: "resume" | "transcript", rec: any, extraCf: Record<string, any> = {}, cols: Record<string, any> = {}) {
+  markPermanent(rec);
   const cf = { ...(cand.custom_fields || {}), ...extraCf };
   cf.enrich = { ...(cf.enrich || {}), [part]: rec, version: 1 };
   await sb(`candidates?id=eq.${cand.id}`, { method: "PATCH", body: JSON.stringify({ ...cols, custom_fields: cf, updated_at: now() }) });
@@ -446,6 +458,9 @@ async function saveEnrich(cand: any, part: "resume" | "transcript", rec: any, ex
 }
 
 async function logError(cand: any, part: string, note: string, meta: Record<string, any> = {}) {
+  // saveEnrich runs first; skip the log when this is a known-dead link that was already logged once.
+  const prev = cand.__prevEnrich?.[part];
+  if (prev && prev.status && prev.status !== "ok" && String(prev.source_url || "") === String(cand.custom_fields?.enrich?.[part]?.source_url || "") && PERMANENT_RE.test(note)) return;
   try {
     await sb(`activities`, { method: "POST", body: JSON.stringify({ type: "enrich_error", candidate_id: cand.id, description: `Enrichment (${part}) failed: ${head(note, 300)}`, metadata: { part, ...meta } }) });
   } catch { /* non-fatal */ }
@@ -670,6 +685,7 @@ async function enrichTranscript(cand: any, openaiKey: string): Promise<any> {
 
 async function enrichOne(cand: any, what: string, apiKey: string, openaiKey: string) {
   const out: any = { candidate_id: cand.id };
+  cand.__prevEnrich = JSON.parse(JSON.stringify(cand.custom_fields?.enrich || {}));
   if (what === "resume" || what === "both") out.resume = await enrichResume(cand, apiKey);
   if (what === "transcript" || what === "both") out.transcript = await enrichTranscript(cand, openaiKey);
   return out;
